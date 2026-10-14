@@ -1125,6 +1125,19 @@ static void J_net() {
     (unsigned long)(lora_interface ? lora_interface.rx() : 0), (unsigned long)(lora_interface ? lora_interface.tx() : 0), (unsigned)RNS::Transport::active_links().size());
 }
 static void J_ram() { P("\"free_ram\":%u,\"free_flash\":%u", (unsigned)RNS::Utilities::Memory::heap_available(), (unsigned)RNS::Utilities::OS::storage_available()); }
+#ifdef HAS_ENV_SENSORS
+static void J_env() {
+  if (!EnvSensors::installed()) { P("\"error\":\"no sensor\""); return; }
+  EnvSensors::read();
+  P("\"temp\":%.1f", (double)EnvSensors::temperature);
+  if (EnvSensors::humidity_found) P(",\"humidity\":%.1f", (double)EnvSensors::humidity);
+  if (EnvSensors::pressure_found) P(",\"pressure\":%.1f,\"altitude\":%.0f", (double)EnvSensors::pressure_hpa, (double)EnvSensors::altitude_m);
+  P(",\"sensor\":\"%s\"", EnvSensors::name());
+#if MCU_VARIANT == MCU_NRF52
+  P(",\"mcu_temp\":%.1f", (double)readCPUTemperature());
+#endif
+}
+#endif
 static void J_clean(char* s) { for (; *s; s++) if (*s == '"' || *s == '\\') *s = '\''; }
 struct SmApiCtx { bool shrt; int o, n, seen, rows; bool more; double now; };
 static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, const RNS::Bytes& via, void* vc) {
@@ -1139,11 +1152,18 @@ static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, con
 static void api_reply(const char* path) {
   if (!sm.api) { P("{\"error\":\"api disabled\"}"); return; }
   const char* e = path + 4; if (*e == '/') e++;
+#ifdef HAS_ENV_SENSORS
+  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\",\"env\"]}"); return; }
+#else
   if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\"]}"); return; }
+#endif
   if (!strcmp(e, "bat")) { P("{"); J_bat(); P("}"); return; }
   if (!strcmp(e, "up")) { P("{"); J_up(); P("}"); return; }
   if (!strcmp(e, "net")) { P("{"); J_net(); P("}"); return; }
   if (!strcmp(e, "all")) { P("{"); J_bat(); P(","); J_up(); P(","); J_net(); P(",\"airtime\":%.1f}", airtime * 100); return; }
+#ifdef HAS_ENV_SENSORS
+  if (!strcmp(e, "env")) { P("{"); J_env(); P("}"); return; }
+#endif
   if (!strcmp(e, "radio")) {
     P("{\"freq\":%lu,\"bw\":%lu,\"sf\":%d,\"cr\":%d,\"txp\":%d,\"airtime\":%.1f,\"noise\":%d,\"rssi\":%d,\"snr\":%d}",
       (unsigned long)lora_freq, (unsigned long)lora_bw, lora_sf, lora_cr, lora_txp, airtime * 100, noise_floor, last_rssi, (int)((int8_t)last_snr_raw) / 4);
@@ -1239,7 +1259,11 @@ static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmtu";
 #else
 static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu";
 #endif
+#ifdef HAS_ENV_SENSORS
+static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs", "/api/env"};
+#else
 static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs"};
+#endif
 
 void sm_register(RNS::Destination& dest) {
   dest.register_request_handler("/page/index.mu", sm_serve, RNS::Type::Destination::ALLOW_ALL);
