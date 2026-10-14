@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScotMesh NomadNet Page Reference</title>
+<link rel="stylesheet" href="../Console/assets/css/water.css">
+<style>
+  /* Minimal additions on top of water.css -- no new palette, just layout glue. */
+  nav.jump { display: flex; flex-wrap: wrap; gap: 0 1em; margin-bottom: 1.5em; }
+  nav.jump span.menu a { white-space: nowrap; }
+  .lede { color: var(--text-muted); max-width: 70ch; }
+  section { margin-bottom: 2.5em; }
+  details > summary code { margin-left: 4px; }
+  details ul { margin-top: 0.4em; }
+  table.api td code { white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<h1>ScotMesh NomadNet Page Reference</h1>
+<p class="lede">Every page and API path a ScotMesh microReticulum node answers on its <code>nomadnet</code> destination, straight from <code>ScotMesh.h</code> &mdash; what each one shows, who can see it, and what it lets you do. Click a page to expand it.</p>
+
+<nav class="jump">
+  <span class="menu"><a href="#public">Public</a></span>
+  <span class="menu"><a href="#settings">Settings</a></span>
+  <span class="menu"><a href="#access">Access</a></span>
+  <span class="menu"><a href="#device">Device</a></span>
+  <span class="menu"><a href="#telemetry">Telemetry</a></span>
+  <span class="menu"><a href="#api">JSON API</a></span>
+</nav>
+
+<section id="public">
+<h2>Public</h2>
+<p class="lede">Reachable by anyone who can hear the node &mdash; no identity or password needed, unless noted.</p>
+
+<details>
+<summary><kbd>I</kbd> <code>/page/index.mu</code> &mdash; Home</summary>
+<p>The node's landing page &mdash; whatever the operator has chosen to make public.</p>
+<ul>
+  <li>Node name, battery gauge (10-block bar, %, voltage, charge arrow)</li>
+  <li>Uptime, path count (links to Routes), radio freq/SF, live airtime %, operator note</li>
+  <li>"Admin" link if you're already registered, or "Register" if password sign-up is on</li>
+  <li>Verified-identity line, firmware + board footer</li>
+</ul>
+<p><mark>Visitor view is configurable</mark> on the Settings &rarr; Home page.</p>
+</details>
+
+<details>
+<summary><kbd>r</kbd> <code>/page/r.mu</code> &mdash; Routes</summary>
+<p>The node's path table: destination hash &middot; hop count &middot; last heard, 10 rows per page, short or full hash display.</p>
+</details>
+
+<details>
+<summary><kbd>b</kbd> <code>/page/b.mu</code> &mdash; Neighbours</summary>
+<p>Peers this node has heard announce: destination hash &middot; time since heard &middot; name, paginated.</p>
+</details>
+
+<details>
+<summary><kbd>l</kbd> <code>/page/l.mu</code> &mdash; Register</summary>
+<p>Request admin access with a password, if the operator has turned registration on. Goes straight to admin, or into an approval queue, depending on operator setting.</p>
+<p><mark>3 wrong tries locks you out for 15 min; 10 wrong tries mesh-wide pauses registration for an hour.</mark></p>
+</details>
+
+</section>
+
+<section id="settings">
+<h2>Settings</h2>
+<p class="lede">Reachable only once your identity is on the admin list &mdash; everyone else lands on an "Admins only" page instead.</p>
+
+<details>
+<summary><kbd>s</kbd> <code>/page/s.mu</code> &mdash; Settings hub</summary>
+<p>Menu into the six pages below, each with its current value shown inline.</p>
+</details>
+
+<details>
+<summary><kbd>n</kbd> <code>/page/n.mu</code> &mdash; Name &amp; announce</summary>
+<ul>
+  <li>Node name (32 chars), operator note (22 chars)</li>
+  <li>Announce interval: 30m / 1h / 3h / 6h / 12h</li>
+  <li>Renaming re-announces the node immediately</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>h</kbd> <code>/page/h.mu</code> &mdash; Home page</summary>
+<ul>
+  <li>Checkboxes for what a visitor sees: battery, uptime, radio, paths, airtime, operator, routes-link</li>
+  <li>Telemetry API on/off switch</li>
+  <li>"Preview" link &mdash; see the visitor view live</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>g</kbd> <code>/page/g.mu</code> &mdash; Map (rmap.world)</summary>
+<ul>
+  <li>Paste a coordinate (lat, lon) + height in metres</li>
+  <li>Exact or ~1&nbsp;km-rounded precision, publish on/off</li>
+  <li>Last-sent time once published, "Announce now" action</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>f</kbd> <code>/page/f.mu</code> &mdash; Radio</summary>
+<ul>
+  <li>Current frequency, bandwidth, SF, CR, TX power</li>
+  <li>Two one-tap presets: ScotMesh 868 / 433</li>
+</ul>
+<p><mark>5-minute reversible trial &mdash; auto-reverts unless you hit Keep.</mark></p>
+</details>
+
+<details>
+<summary><kbd>w</kbd> <code>/page/w.mu</code> &mdash; Role</summary>
+<ul>
+  <li>Fixed relay &middot; Access point &middot; Mobile &middot; End device</li>
+  <li>Relays forward traffic for others; end devices never do</li>
+</ul>
+<p><mark>Needs a restart to apply.</mark></p>
+</details>
+
+<details>
+<summary><kbd>y</kbd> <code>/page/y.mu</code> &mdash; Power</summary>
+<ul>
+  <li>Battery-% threshold (5&ndash;60%), action below it: lower TX to 10&nbsp;dBm, radio off until charged, or nothing</li>
+  <li>Separate hard cutoff: radio off below 3.3&nbsp;V</li>
+  <li>Live flag if a limit is currently in effect</li>
+</ul>
+</details>
+
+</section>
+
+<section id="access">
+<h2>Access</h2>
+
+<details>
+<summary><kbd>c</kbd> <code>/page/c.mu</code> &mdash; Access hub</summary>
+<p>Menu into Admins / Password / Change log, each with a live count.</p>
+</details>
+
+<details>
+<summary><kbd>k</kbd> <code>/page/k.mu</code> &mdash; Admins</summary>
+<ul>
+  <li>Up to 8 admin identity hashes, your own row marked "you"</li>
+  <li>Add by pasting a 32-hex identity hash</li>
+</ul>
+<p><mark>Removing an admin is confirm-gated; you can't remove the last admin.</mark></p>
+</details>
+
+<details>
+<summary><kbd>p</kbd> <code>/page/p.mu</code> &mdash; Password registration</summary>
+<ul>
+  <li>On/off, and "needs approval" (routes new sign-ups into a queue instead of auto-admitting)</li>
+  <li>Set/change password (8+ chars) &mdash; salted + hashed, never stored in plain text</li>
+  <li>Outcome of the last registration attempt</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>j</kbd> <code>/page/j.mu</code> &mdash; Change log</summary>
+<p>Last 32 admin actions: how long ago, what happened, which identity.</p>
+</details>
+
+<details>
+<summary><kbd>q</kbd> <code>/page/q.mu</code> &mdash; Waiting for approval</summary>
+<p>Only reachable when "needs approval" is on. Shows pending registration requests and how long they've waited; approve or deny each.</p>
+</details>
+
+</section>
+
+<section id="device">
+<h2>Device</h2>
+
+<details>
+<summary><kbd>d</kbd> <code>/page/d.mu</code> &mdash; Device hub</summary>
+<p>Menu into the five pages below.</p>
+</details>
+
+<details>
+<summary><kbd>e</kbd> <code>/page/e.mu</code> &mdash; Health</summary>
+<ul>
+  <li>Free RAM / flash, uptime, boot count, last reset reason</li>
+  <li>Radio noise floor, last RSSI/SNR, current + average airtime %</li>
+  <li>Packets rx/tx, path/announce/known-destination/link/neighbour table sizes</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>i</kbd> <code>/page/i.mu</code> &mdash; Lights &amp; Bluetooth</summary>
+<ul>
+  <li>LED mode: on / off / first 10 min only &mdash; errors always show regardless</li>
+  <li>"Blink for 30s" locator action</li>
+  <li>Bluetooth on/off, "unpair all paired phones" (where supported)</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>o</kbd> <code>/page/o.mu</code> &mdash; Logs</summary>
+<p>Last 5 log lines, with a refresh action.</p>
+</details>
+
+<details>
+<summary><kbd>x</kbd> <code>/page/x.mu</code> &mdash; Maintenance</summary>
+<p>"Announce now", auto-restart schedule: off / daily / weekly.</p>
+<p><mark>Confirm-gated resets: clear routes &amp; data, factory reset, full reset.</mark></p>
+</details>
+
+<details>
+<summary><kbd>m</kbd> <code>/page/m.mu</code> &mdash; Restart &amp; update</summary>
+<ul>
+  <li>Restart (confirm-gated, ~15s offline)</li>
+  <li>nRF52: Bluetooth DFU or USB-bootloader window &mdash; ESP32 (with a spare app slot): 20-min WiFi update AP</li>
+</ul>
+<p><mark>Needs battery &ge;30% or charging; one-time 2-minute confirm token.</mark></p>
+</details>
+
+<details>
+<summary><kbd>u</kbd> <code>/page/u.mu</code> &mdash; About</summary>
+<p>Firmware tag, board name, transport/management/NomadNet/probe destination hashes.</p>
+</details>
+
+</section>
+
+<section id="telemetry">
+<h2>Telemetry</h2>
+<p class="lede">Compiled in only when the board defines <code>HAS_ENV_SENSORS</code> &mdash; currently the Seeed Solar Node P1.</p>
+
+<details open>
+<summary><kbd>t</kbd> <code>/page/t.mu</code> &mdash; Telemetry</summary>
+<p>Auto-detected M5 Grove ENV sensor &mdash; ENV&nbsp;I (DHT12+BMP280), ENV&nbsp;II (SHT30+BMP280) or ENV&nbsp;III (SHT30+QMP6988), whichever is actually plugged in.</p>
+<ul>
+  <li>Temperature, and humidity if a humidity sensor was found</li>
+  <li>Pressure + calculated altitude if a pressure sensor was found</li>
+  <li>Which exact chips were detected (e.g. "SHT30 + QMP6988")</li>
+  <li>MCU die temperature, read directly off the nRF52840</li>
+  <li>Says plainly if nothing is attached, or the read failed</li>
+</ul>
+</details>
+
+</section>
+
+<section id="api">
+<h2>JSON API</h2>
+<p class="lede">Same destination as the pages above, plain JSON replies &mdash; for scripts and dashboards rather than browsing. Toggled by the Telemetry API switch on the Home page settings.</p>
+
+<table class="api">
+<thead><tr><th>Endpoint</th><th>Fields</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>/api</code></td><td>v, api: [&hellip;]</td><td>Lists every endpoint below.</td></tr>
+<tr><td><code>/api/bat</code></td><td>percent, voltage, charging</td><td></td></tr>
+<tr><td><code>/api/up</code></td><td>uptime, reset</td><td></td></tr>
+<tr><td><code>/api/net</code></td><td>routes, neighbours, rx, tx, links</td><td></td></tr>
+<tr><td><code>/api/radio</code></td><td>freq, bw, sf, cr, txp, airtime, noise, rssi, snr</td><td></td></tr>
+<tr><td><code>/api/sys</code></td><td>fw, board, name, free_ram, free_flash</td><td></td></tr>
+<tr><td><code>/api/health</code></td><td>free_ram, free_flash, reboots, reset, paths, paths_max, announces, neighbours</td><td></td></tr>
+<tr><td><code>/api/pos</code></td><td>lat, lon, height</td><td>Errors if the map page hasn't published a position.</td></tr>
+<tr><td><code>/api/paths</code></td><td>total, o, cols: [dest,hops,age_s,via], rows: [&hellip;]</td><td>Paginate with <code>?o=</code>/<code>?n=</code>, short hashes with <code>?s=1</code>.</td></tr>
+<tr><td><code>/api/nbrs</code></td><td>total, o, cols: [dest,age_s,name], rows: [&hellip;]</td><td>Same pagination as <code>/api/paths</code>.</td></tr>
+<tr><td><code>/api/all</code></td><td>bat + up + net + airtime, combined</td><td></td></tr>
+</tbody>
+</table>
+
+</section>
+
+<footer>
+Generated from <code>ScotMesh.h</code> in microReticulum_Firmware. Admin pages require being on the Admins list (<code>/page/k.mu</code>) or registering with a password (<code>/page/l.mu</code>) &mdash; everyone else sees "Admins only." Every reply is built to fit one LoRa packet, so a few pages trim their own content rather than risk silently failing to deliver.
+</footer>
+
+</body>
+</html>
