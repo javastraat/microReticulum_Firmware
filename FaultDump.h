@@ -36,8 +36,19 @@ extern "C" void MemoryManagement_Handler(void) __attribute__((alias("HardFault_H
 extern "C" void BusFault_Handler(void)         __attribute__((alias("HardFault_Handler")));
 extern "C" void UsageFault_Handler(void)       __attribute__((alias("HardFault_Handler")));
 
+// Uncaught C++ exception. libstdc++'s default handler demangles the type name
+// for a stderr nobody reads, and drags ~29 KB of demangler into flash; this
+// one records it like a fault (cfsr = hfsr = 0, lr = caller of terminate).
+namespace __gnu_cxx {
+  void __verbose_terminate_handler() {
+    fault_record = FaultRecord{FAULT_RECORD_MAGIC, 0, 0, 0, 0, 0, (uint32_t)__builtin_return_address(0), 0, 0};
+    NVIC_SystemReset();
+  }
+}
+
 static void fault_dump_print() {
   if (fault_record.magic != FAULT_RECORD_MAGIC) { printf("[init] fault record: none\n"); return; }
+  if (!fault_record.cfsr && !fault_record.hfsr) printf("[init] fault record: uncaught C++ exception\n");
   printf("[init] fault record: cfsr=%08lx hfsr=%08lx bfar=%08lx mmfar=%08lx pc=%08lx lr=%08lx xpsr=%08lx sp=%08lx\n",
          (unsigned long)fault_record.cfsr, (unsigned long)fault_record.hfsr, (unsigned long)fault_record.bfar,
          (unsigned long)fault_record.mmfar, (unsigned long)fault_record.pc, (unsigned long)fault_record.lr,
