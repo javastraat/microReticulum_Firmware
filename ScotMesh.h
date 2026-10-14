@@ -97,6 +97,26 @@
   #endif
 #endif
 
+// Optional pages / API endpoints, spliced into the registration tables and the /api index
+#ifdef HAS_ENV_SENSORS
+  #define SM_IDS_ENV "t"
+  #define SM_API_ENV , "/api/env"
+  #define SM_API_ENV_NAME ",\"env\""
+#else
+  #define SM_IDS_ENV ""
+  #define SM_API_ENV
+  #define SM_API_ENV_NAME ""
+#endif
+#ifdef SM_HISTORY                       // telemetry history, needs room on flash (P1: QSPI)
+  #define SM_IDS_HIST "z"
+  #define SM_API_HIST , "/api/hist"
+  #define SM_API_HIST_NAME ",\"hist\""
+#else
+  #define SM_IDS_HIST ""
+  #define SM_API_HIST
+  #define SM_API_HIST_NAME ""
+#endif
+
 #define SM_HOME_BUDGET   400
 #define SM_HARD_LIMIT    409      // 431 B link MDU minus response framing
 #define SM_RAM_FLOOR     8192     // below this, answer "busy" instead of building
@@ -145,6 +165,7 @@ struct SmConfig {
 static SmConfig sm;
 static const char* SM_CFG_PATH = "/scotmesh.cfg";
 static const char* SM_LOG_PATH = "/scotmesh.chg";
+static const char* SM_HIST_PATH = "/scotmesh.hst";   // telemetry history (SM_HISTORY)
 static void sm_save() { RNS::Utilities::OS::write_file(SM_CFG_PATH, RNS::Bytes((const uint8_t*)&sm, sizeof(sm))); }
 static void sm_load() {
   RNS::Bytes b;
@@ -363,7 +384,7 @@ void sm_early_boot() {
   if (RNS::Utilities::OS::file_exists(SM_WIPE_PATH)) {
     printf("[scotmesh] full reset: wiping identity, routes, known identities and settings\n");
     for (const char* d : {"./path_store", "./known_store", "./hashlist_store", "./cache"}) sm_wipe_dir(d);
-    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
+    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_HIST_PATH, SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
   }
 #if defined(SCOTMESH_WIFI_UPDATE)
   sm_update_mode();
@@ -712,6 +733,9 @@ static void pg_hub() {
   P("\n>>Admin\n"); PL("Settings", 's'); P("  "); PL("Access", 'c'); P("  "); PL("Device", 'd');
 #ifdef HAS_ENV_SENSORS
   P("  "); PL("Telemetry", 't');
+#endif
+#ifdef SM_HISTORY
+  P("  "); PL("History", 'z');
 #endif
   P("\n<\n"); PL("Home", 'I');
 }
@@ -1115,6 +1139,151 @@ static void pg_password(const RNS::Bytes& rid) {
   if (sm_last_attempt[0]) P("\n>>Last attempt\n%s", sm_last_attempt);
 }
 
+#ifdef SM_HISTORY
+// ---------------------------------------------------------------------------
+// Telemetry history: a sample every 10 min, averaged into one 16 B record an
+// hour, 168 records (7 days, ~2.7 KB) in one flash file, oldest first. There
+// is no wall clock, so records are placed by counting back from the newest;
+// the first record after a start carries SMF_BOOT, as the time off is unknown.
+// ---------------------------------------------------------------------------
+#define SM_HIST_MAX 168
+enum : uint8_t { SMF_BOOT = 1, SMF_CHG = 2, SMF_ENV = 4, SMF_HUM = 8, SMF_HPA = 16, SMF_MCU = 32 };
+struct SmHist { uint8_t f, pct; uint16_t mv; int16_t t10; int8_t tmin, tmax; uint8_t hum, nbrs; uint16_t hpa10, paths; int8_t mcu; uint8_t pad; };
+static_assert(sizeof(SmHist) == 16, "history record must stay 16 B (on-flash format)");
+struct SmAcc { uint32_t mv, pct; int32_t t10, hpa10, hum, mcu; int16_t tmin, tmax; uint8_t n, nb, nt, nh, np, nm; bool chg; };
+static SmAcc sm_acc; static bool sm_hist_boot = true; static uint32_t sm_hist_last = 0, sm_hist_at = 0;
+static void sm_acc_reset() { sm_acc = SmAcc{}; sm_acc.tmin = INT16_MAX; sm_acc.tmax = INT16_MIN; }
+static int8_t sm_i8(double v) { return v < -127 ? -127 : v > 127 ? 127 : (int8_t)v; }
+static size_t sm_hist_read(RNS::Bytes& b) {
+  if (!RNS::Utilities::OS::file_exists(SM_HIST_PATH) || RNS::Utilities::OS::read_file(SM_HIST_PATH, b) == 0 || b.size() % sizeof(SmHist)) return 0;
+  return b.size() / sizeof(SmHist);
+}
+static void sm_hist_sample() {
+  SmAcc& a = sm_acc; if (!a.n) sm_acc_reset();
+  if (battery_voltage > 0.1) { a.mv += (uint32_t)(battery_voltage * 1000 + 0.5); a.pct += sm_pct(); a.nb++; if (sm_charging()) a.chg = true; }
+#ifdef HAS_ENV_SENSORS
+  if (EnvSensors::installed() && EnvSensors::read() && !std::isnan(EnvSensors::temperature)) {
+    int t = (int)std::lround(EnvSensors::temperature * 10); a.t10 += t; a.nt++;
+    if (t < a.tmin) a.tmin = t;
+    if (t > a.tmax) a.tmax = t;
+    if (EnvSensors::humidity_found) { a.hum += std::lround(EnvSensors::humidity); a.nh++; }
+    if (EnvSensors::pressure_found) { a.hpa10 += std::lround(EnvSensors::pressure_hpa * 10); a.np++; }
+  }
+#endif
+#if MCU_VARIANT == MCU_NRF52
+  a.mcu += std::lround(readCPUTemperature()); a.nm++;
+#endif
+  a.n++;
+}
+static void sm_hist_write() {
+  SmAcc& a = sm_acc; SmHist h{};
+  h.f = (sm_hist_boot ? SMF_BOOT : 0) | (a.chg ? SMF_CHG : 0);
+  if (a.nb) { h.mv = a.mv / a.nb; h.pct = a.pct / a.nb; }
+  if (a.nt) { h.f |= SMF_ENV; h.t10 = a.t10 / a.nt; h.tmin = sm_i8(std::floor(a.tmin / 10.0)); h.tmax = sm_i8(std::ceil(a.tmax / 10.0)); }
+  if (a.nh) { h.f |= SMF_HUM; h.hum = a.hum / a.nh; }
+  if (a.np) { h.f |= SMF_HPA; h.hpa10 = a.hpa10 / a.np; }
+  if (a.nm) { h.f |= SMF_MCU; h.mcu = sm_i8((double)a.mcu / a.nm); }
+  h.nbrs = sm_nbrs.size() > 255 ? 255 : sm_nbrs.size();
+  size_t pt = RNS::Transport::new_path_table().size(); h.paths = pt > 65535 ? 65535 : pt;
+  RNS::Bytes old; size_t n = sm_hist_read(old), keep = n >= SM_HIST_MAX ? SM_HIST_MAX - 1 : n;
+  RNS::Bytes out = keep ? RNS::Bytes(old.data() + (n - keep) * sizeof(SmHist), keep * sizeof(SmHist)) : RNS::Bytes((const uint8_t*)&h, sizeof(h));
+  if (keep) out.append((const uint8_t*)&h, sizeof(h));
+  RNS::Utilities::OS::write_file(SM_HIST_PATH, out);
+  sm_hist_boot = false; sm_hist_at = millis(); a.n = 0;
+}
+static void sm_hist_loop(uint32_t now) {
+  if (now - sm_hist_last < 600000UL) return;
+  sm_hist_last = now; sm_hist_sample();
+  if (sm_acc.n >= 6) sm_hist_write();
+}
+
+// History page: 24 h battery sparkline, then summaries; optional lines are
+// dropped if they would push the page past one packet.
+static void pg_history() {
+  RNS::Bytes b; size_t n = sm_hist_read(b);
+  Ph("History");
+  if (!n) { P(DIM("First record after 1 h of uptime.") "\n"); PBACK(); return; }
+  const SmHist* h = (const SmHist*)b.data(); size_t d0 = n > 24 ? n - 24 : 0;
+  P(DIM("bat") " `F2c5");
+  int marks = 0;
+  for (size_t i = d0; i < n; i++) {
+    if ((h[i].f & SMF_BOOT) && i > d0 && marks++ < 3) P("`Fda3|`F2c5");
+    if (!h[i].mv) P(" "); else { char s[4] = {'\xE2', '\x96', (char)(0x81 + (h[i].pct * 8 / 101))}; P("%s", s); }
+  }
+  P("`f\n");
+  int mn = 101, mx = -1, best = 0, bh = 0; long start = -1;
+  for (size_t i = d0; i < n; i++) {
+    if (!h[i].mv) { start = -1; continue; }
+    if (h[i].pct < mn) mn = h[i].pct;
+    if (h[i].pct > mx) mx = h[i].pct;
+    if ((h[i].f & (SMF_CHG | SMF_BOOT)) || start < 0) { start = (h[i].f & SMF_CHG) ? -1 : (long)i; continue; }
+    int drop = h[start].pct - h[i].pct; if (drop > best) { best = drop; bh = i - start; }
+  }
+  if (mx >= 0) { P("%u%% now " MIDDOT " 24h %d-%d%%", h[n - 1].pct, mn, mx); if (best > 0) P(" " MIDDOT " -%d%%/%dh", best, bh); P("\n"); }
+  const size_t room = SM_HARD_LIMIT - 26;         // keep space for the back link
+  auto fit = [&](size_t before) { if (sm_pn > room) pb_cut(before); };
+  size_t at = sm_pn; P(DIM("days"));
+  for (size_t d = 0; d < 7 && d * 24 < n; d++) {
+    size_t hi = n - d * 24, lo = hi > 24 ? hi - 24 : 0; int a = 101, z = -1;
+    for (size_t i = lo; i < hi; i++) if (h[i].mv) { if (h[i].pct < a) a = h[i].pct; if (h[i].pct > z) z = h[i].pct; }
+    if (z >= 0) P(" %d-%d", a, z); else P(" -");
+  }
+  P("\n"); fit(at);
+  int t0 = 127, t1 = -127, w0 = 127, w1 = -127, m0 = 127, m1 = -127, u0 = 255, u1 = -1, p0 = -1, p1 = -1, nb1 = 0;
+  for (size_t i = 0; i < n; i++) {
+    bool day = i >= d0;
+    if (h[i].f & SMF_ENV) { if (h[i].tmin < w0) w0 = h[i].tmin; if (h[i].tmax > w1) w1 = h[i].tmax; if (day) { if (h[i].tmin < t0) t0 = h[i].tmin; if (h[i].tmax > t1) t1 = h[i].tmax; } }
+    if (!day) continue;
+    if (h[i].f & SMF_MCU) { if (h[i].mcu < m0) m0 = h[i].mcu; if (h[i].mcu > m1) m1 = h[i].mcu; }
+    if (h[i].f & SMF_HUM) { if (h[i].hum < u0) u0 = h[i].hum; if (h[i].hum > u1) u1 = h[i].hum; }
+    if (h[i].f & SMF_HPA) { if (p0 < 0) p0 = h[i].hpa10; p1 = h[i].hpa10; }
+    if (h[i].nbrs > nb1) nb1 = h[i].nbrs;
+  }
+  if (t1 >= t0 || m1 >= m0) {
+    at = sm_pn; P(DIM("temp"));
+    if (t1 >= t0) P(" %d/%dC 7d %d/%dC", t0, t1, w0, w1);
+    if (m1 >= m0) P(" " MIDDOT " mcu %d/%dC", m0, m1);
+    P("\n"); fit(at);
+  }
+  if (u1 >= 0 || p1 >= 0) {
+    at = sm_pn; P(DIM("air"));
+    if (u1 >= 0) P(" %d-%d%%", u0, u1);
+    if (p1 >= 0) P(" " MIDDOT " %d>%dhPa", (p0 + 5) / 10, (p1 + 5) / 10);
+    P("\n"); fit(at);
+  }
+  at = sm_pn; P(DIM("mesh") " %u nbrs (max %d) " MIDDOT " %u routes\n", h[n - 1].nbrs, nb1, h[n - 1].paths); fit(at);
+  char ag[8]; at = sm_pn; P(DIM("%uh, newest %s ago") "\n", (unsigned)n, sm_age((millis() - sm_hist_at) / 1000.0, ag));
+  if (!sm_hist_at) pb_cut(at); else fit(at);     // the newest record's age is only known for this run
+  PBACK();
+}
+
+// /api/hist: newest first, `o` hours back, `n` rows (default 6, max 24).
+static void J_hist() {
+  RNS::Bytes b; size_t n = sm_hist_read(b); const SmHist* h = (const SmHist*)b.data();
+  int o = atoi(Q("o")), want = Qhas("n") ? atoi(Q("n")) : 6;
+  if (o < 0) o = 0;
+  if (want < 1) want = 1;
+  if (want > 24) want = 24;
+  P("{\"total\":%u,\"o\":%d,", (unsigned)n, o);
+  if (sm_hist_at) P("\"last_s\":%lu,", (unsigned long)((millis() - sm_hist_at) / 1000));
+  P("\"cols\":[\"h\",\"pct\",\"mv\",\"chg\",\"t\",\"hum\",\"hpa\",\"mcu\",\"nbrs\",\"paths\",\"boot\"],\"rows\":[");
+  int rows = 0; bool more = false;
+  for (long i = (long)n - 1 - o; i >= 0; i--) {
+    if (rows >= want) { more = true; break; }
+    const SmHist& r = h[i]; size_t before = sm_pn;
+    P("%s[%ld,%u,%u,%d,", rows ? "," : "", (long)n - 1 - i, r.pct, r.mv, (r.f & SMF_CHG) ? 1 : 0);
+    if (r.f & SMF_ENV) P("%.1f,", r.t10 / 10.0); else P("null,");
+    if (r.f & SMF_HUM) P("%u,", r.hum); else P("null,");
+    if (r.f & SMF_HPA) P("%.1f,", r.hpa10 / 10.0); else P("null,");
+    if (r.f & SMF_MCU) P("%d,", r.mcu); else P("null,");
+    P("%u,%u,%d]", r.nbrs, r.paths, (r.f & SMF_BOOT) ? 1 : 0);
+    if (sm_pn > SM_HOME_BUDGET - 16) { pb_cut(before); more = true; break; }
+    rows++;
+  }
+  P(more ? "],\"more\":true}" : "]}");
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Telemetry API (JSON, no micron, open to unidentified clients)
 // ---------------------------------------------------------------------------
@@ -1152,17 +1321,16 @@ static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, con
 static void api_reply(const char* path) {
   if (!sm.api) { P("{\"error\":\"api disabled\"}"); return; }
   const char* e = path + 4; if (*e == '/') e++;
-#ifdef HAS_ENV_SENSORS
-  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\",\"env\"]}"); return; }
-#else
-  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\"]}"); return; }
-#endif
+  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\"" SM_API_ENV_NAME SM_API_HIST_NAME "]}"); return; }
   if (!strcmp(e, "bat")) { P("{"); J_bat(); P("}"); return; }
   if (!strcmp(e, "up")) { P("{"); J_up(); P("}"); return; }
   if (!strcmp(e, "net")) { P("{"); J_net(); P("}"); return; }
   if (!strcmp(e, "all")) { P("{"); J_bat(); P(","); J_up(); P(","); J_net(); P(",\"airtime\":%.1f}", airtime * 100); return; }
 #ifdef HAS_ENV_SENSORS
   if (!strcmp(e, "env")) { P("{"); J_env(); P("}"); return; }
+#endif
+#ifdef SM_HISTORY
+  if (!strcmp(e, "hist")) { J_hist(); return; }
 #endif
   if (!strcmp(e, "radio")) {
     P("{\"freq\":%lu,\"bw\":%lu,\"sf\":%d,\"cr\":%d,\"txp\":%d,\"airtime\":%.1f,\"noise\":%d,\"rssi\":%d,\"snr\":%d}",
@@ -1243,6 +1411,9 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
 #ifdef HAS_ENV_SENSORS
       case 't': pg_telemetry(); break;
 #endif
+#ifdef SM_HISTORY
+      case 'z': pg_history(); break;
+#endif
       default: Ph("Not found"); PL("Home", 'I');
     }
   }
@@ -1254,16 +1425,8 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
   return RNS::Bytes(packer.data(), packer.size());
 }
 
-#ifdef HAS_ENV_SENSORS
-static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmtu";
-#else
-static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu";
-#endif
-#ifdef HAS_ENV_SENSORS
-static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs", "/api/env"};
-#else
-static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs"};
-#endif
+static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu" SM_IDS_ENV SM_IDS_HIST;
+static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs" SM_API_ENV SM_API_HIST};
 
 void sm_register(RNS::Destination& dest) {
   dest.register_request_handler("/page/index.mu", sm_serve, RNS::Type::Destination::ALLOW_ALL);
@@ -1325,6 +1488,9 @@ void sm_loop() {
     if (low && sm.pwr_act == 1 && !sm_power_limited && lora_txp > 10) { sm_saved_txp = lora_txp; lora_txp = 10; setTXPower(); sm_power_limited = true; NOTICE("[power] low battery, TX power lowered"); }
     else if (sm_power_limited && recovered) { lora_txp = sm_saved_txp; setTXPower(); sm_power_limited = false; NOTICE("[power] battery recovered, TX power restored"); }
   }
+#ifdef SM_HISTORY
+  sm_hist_loop(now);
+#endif
   // announces
   if (sm.map_on && sm_disc && !sm_disc_busy && sm_disc_due && (int32_t)(now - sm_disc_due) >= 0) { sm_disc_due = now + sm_ann_ms(); sm_disc_start(); }
   if (sm_nn_due && (int32_t)(now - sm_nn_due) >= 0 && nomadnet_destination) { sm_nn_due = now + sm_ann_ms(); nomadnet_destination.announce(RNS::Bytes(nomadnet_name)); NOTICE("[nomadnet] periodic announce"); }

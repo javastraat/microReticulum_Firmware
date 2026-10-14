@@ -236,6 +236,19 @@
 </ul>
 </details>
 
+<details open>
+<summary><kbd>z</kbd> <code>/page/z.mu</code> &mdash; History</summary>
+<p>Compiled in with <code>SM_HISTORY</code> (Solar Node P1). A sample every 10&nbsp;minutes, averaged into one record an hour; 7&nbsp;days are kept on the QSPI flash and survive restarts. Linked from the Admin hub.</p>
+<ul>
+  <li>24&nbsp;h battery sparkline, oldest to newest; an amber <code>|</code> marks a restart (the time the node was off is unknown, so the bars just continue)</li>
+  <li>Battery now, the 24&nbsp;h min&ndash;max, and the biggest drop while not charging (e.g. <code>-14%/11h</code> overnight)</li>
+  <li>Battery min&ndash;max for each of the last 7 days, newest first</li>
+  <li>Sensor temperature 24&nbsp;h and 7&nbsp;d min/max, MCU temperature, humidity range and the pressure trend</li>
+  <li>Neighbours and routes now, the 24&nbsp;h neighbour peak</li>
+  <li>Lines that would not fit in one LoRa packet are left out, battery lines first to stay</li>
+</ul>
+</details>
+
 </section>
 
 <section id="api">
@@ -257,6 +270,7 @@
 <tr><td><code>/api/nbrs</code></td><td>total, o, cols: [dest,age_s,name], rows: [&hellip;]</td><td>Same pagination as <code>/api/paths</code>.</td></tr>
 <tr><td><code>/api/all</code></td><td>bat + up + net + airtime, combined</td><td></td></tr>
 <tr><td><code>/api/env</code></td><td>temp, humidity, pressure, altitude, sensor, mcu_temp</td><td>Env-sensor boards only (Solar Node P1). Errors if no sensor is attached.</td></tr>
+<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips hours, <code>?n=</code> rows (default 6, max 24, cut to one packet with <code>more</code>). Missing sensors are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
 </tbody>
 </table>
 
