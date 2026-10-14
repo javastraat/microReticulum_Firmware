@@ -1151,7 +1151,8 @@ enum : uint8_t { SMF_BOOT = 1, SMF_CHG = 2, SMF_ENV = 4, SMF_HUM = 8, SMF_HPA = 
 struct SmHist { uint8_t f, pct; uint16_t mv; int16_t t10; int8_t tmin, tmax; uint8_t hum, nbrs; uint16_t hpa10, paths; int8_t mcu; uint8_t pad; };
 static_assert(sizeof(SmHist) == 16, "history record must stay 16 B (on-flash format)");
 struct SmAcc { uint32_t mv, pct; int32_t t10, hpa10, hum, mcu; int16_t tmin, tmax; uint8_t n, nb, nt, nh, np, nm; bool chg; };
-static SmAcc sm_acc; static bool sm_hist_boot = true; static uint32_t sm_hist_last = 0, sm_hist_at = 0;
+static SmAcc sm_acc; static bool sm_hist_boot = true; static uint32_t sm_hist_at = 0;
+static uint32_t sm_hist_last = 60000UL - 600000UL;   // wraps: first sample 1 min after start, then every 10 min
 static void sm_acc_reset() { sm_acc = SmAcc{}; sm_acc.tmin = INT16_MAX; sm_acc.tmax = INT16_MIN; }
 static int8_t sm_i8(double v) { return v < -127 ? -127 : v > 127 ? 127 : (int8_t)v; }
 static size_t sm_hist_read(RNS::Bytes& b) {
@@ -1202,7 +1203,18 @@ static void sm_hist_loop(uint32_t now) {
 static void pg_history() {
   RNS::Bytes b; size_t n = sm_hist_read(b);
   Ph("History");
-  if (!n) { P(DIM("First record after 1 h of uptime.") "\n"); PBACK(); return; }
+  if (!n) {                                       // nothing stored yet: show the hour being collected
+    const SmAcc& a = sm_acc;
+    if (!a.n) { P(DIM("First sample 1 min after start.") "\n"); PBACK(); return; }
+    P("First hour: %u/6 samples\n", a.n);
+    if (a.nb) P(DIM("bat") " %lu%% %.2fV%s\n", (unsigned long)(a.pct / a.nb), a.mv / (double)a.nb / 1000.0, a.chg ? " charging" : "");
+    if (a.nt) P(DIM("temp") " %.1fC", a.t10 / (double)a.nt / 10.0);
+    if (a.nh) P(" %ld%%", (long)(a.hum / a.nh));
+    if (a.np) P(" %.0fhPa", a.hpa10 / (double)a.np / 10.0);
+    if (a.nt || a.nh || a.np) P("\n");
+    if (a.nm) P(DIM("mcu") " %ldC\n", (long)(a.mcu / a.nm));
+    PBACK(); return;
+  }
   const SmHist* h = (const SmHist*)b.data(); size_t d0 = n > 24 ? n - 24 : 0;
   P(DIM("bat") " `F2c5");
   int marks = 0;

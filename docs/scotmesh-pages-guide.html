@@ -238,7 +238,7 @@
 
 <details open>
 <summary><kbd>z</kbd> <code>/page/z.mu</code> &mdash; History</summary>
-<p>Compiled in with <code>SM_HISTORY</code> (Solar Node P1). A sample every 10&nbsp;minutes, averaged into one record an hour; 7&nbsp;days are kept on the QSPI flash and survive restarts. Linked from the Admin hub.</p>
+<p>Compiled in with <code>SM_HISTORY</code> (Solar Node P1). A sample every 10&nbsp;minutes, averaged into one record an hour; 7&nbsp;days are kept on the QSPI flash and survive restarts. Linked from the Admin hub. The first sample is taken 1&nbsp;minute after start; until the first hour is stored the page shows the hour in progress (samples so far and their averages). Records are only written per full hour, so a node stuck restarting cannot push the stored week out.</p>
 <ul>
   <li>24&nbsp;h battery sparkline, oldest to newest; an amber <code>|</code> marks a restart (the time the node was off is unknown, so the bars just continue)</li>
   <li>Battery now, the 24&nbsp;h min&ndash;max, and the biggest drop while not charging (e.g. <code>-14%/11h</code> overnight)</li>
