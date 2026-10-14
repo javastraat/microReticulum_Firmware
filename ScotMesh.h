@@ -1034,6 +1034,9 @@ static void pg_telemetry() {
     if (EnvSensors::pressure_found) P(DIM("Pressure") " %.1fhPa  " DIM("Altitude") " %.0fm\n", EnvSensors::pressure_hpa, EnvSensors::altitude_m);
     P(DIM("Sensor") " %s\n", EnvSensors::name());
   }
+#if MCU_VARIANT == MCU_NRF52
+  P(DIM("MCU") " %.1fC\n", (double)readCPUTemperature());
+#endif
   PBACK();
 }
 #endif
