@@ -43,6 +43,9 @@
 #ifdef HAS_PROVISIONING
 #include <microReticulum/Provisioning/Provisioning.h>
 #endif
+#ifdef HAS_ENV_SENSORS
+#include "EnvSensors.h"
+#endif
 
 #ifndef SCOTMESH_FW_TAG
   #define SCOTMESH_FW_TAG "v1.86-scotmesh-dev"
@@ -706,7 +709,11 @@ static void pg_hub() {
   Ph(nomadnet_name); P("%d%% " MIDDOT " up %s\n", sm_pct(), sm_up());
   if (sm_trial) { P("`Fda3! Radio trial`f "); PL("confirm", 'f'); P("\n"); }
   if (!sm_pending.empty()) { char l[16]; snprintf(l, sizeof l, "%u waiting", (unsigned)sm_pending.size()); P("`Fda3!`f "); PL(l, 'q'); P("\n"); }
-  P("\n>>Admin\n"); PL("Settings", 's'); P("  "); PL("Access", 'c'); P("  "); PL("Device", 'd'); P("\n<\n"); PL("Home", 'I');
+  P("\n>>Admin\n"); PL("Settings", 's'); P("  "); PL("Access", 'c'); P("  "); PL("Device", 'd');
+#ifdef HAS_ENV_SENSORS
+  P("  "); PL("Telemetry", 't');
+#endif
+  P("\n<\n"); PL("Home", 'I');
 }
 static const char* SM_ROLE_NAME[] = {"Fixed relay", "Access point", "Mobile", "End device"};
 static int sm_role() {
@@ -1014,6 +1021,23 @@ static void pg_about() {
   PBACK();
 }
 
+#ifdef HAS_ENV_SENSORS
+static void pg_telemetry() {
+  Ph("Telemetry");
+  if (!EnvSensors::installed()) {
+    P(DIM("No environment sensor detected.") "\n");
+  } else if (!EnvSensors::read()) {
+    P(DIM("Sensor read failed.") "\n");
+  } else {
+    if (EnvSensors::humidity_found) P(DIM("Temp") " %.1fC  " DIM("Humidity") " %.1f%%\n", EnvSensors::temperature, EnvSensors::humidity);
+    else P(DIM("Temp") " %.1fC\n", EnvSensors::temperature);
+    if (EnvSensors::pressure_found) P(DIM("Pressure") " %.1fhPa  " DIM("Altitude") " %.0fm\n", EnvSensors::pressure_hpa, EnvSensors::altitude_m);
+    P(DIM("Sensor") " %s\n", EnvSensors::name());
+  }
+  PBACK();
+}
+#endif
+
 static void pg_admins(const RNS::Bytes& rid) {
   const char* msg = nullptr; char kind = 'o'; const char* a = Vv("a"); int o = atoi(Vv("o")); if (o < 0) o = 0;
   std::set<RNS::Bytes> ids = RNS::Transport::remote_management_allowed();
@@ -1193,6 +1217,9 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
       case 'x': pg_maint(rid); break;
       case 'm': pg_update(rid); break;
       case 'u': pg_about(); break;
+#ifdef HAS_ENV_SENSORS
+      case 't': pg_telemetry(); break;
+#endif
       default: Ph("Not found"); PL("Home", 'I');
     }
   }
@@ -1204,7 +1231,11 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
   return RNS::Bytes(packer.data(), packer.size());
 }
 
+#ifdef HAS_ENV_SENSORS
+static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmtu";
+#else
 static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu";
+#endif
 static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs"};
 
 void sm_register(RNS::Destination& dest) {

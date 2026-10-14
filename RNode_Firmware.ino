@@ -33,6 +33,9 @@
 #ifdef HAS_BME
 #include "BME680.h"
 #endif
+#ifdef HAS_ENV_SENSORS
+#include "EnvSensors.h"
+#endif
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -544,6 +547,10 @@ void setup() {
 
 #ifdef HAS_BME
   BME680::init();
+#endif
+
+#ifdef HAS_ENV_SENSORS
+  EnvSensors::init();
 #endif
 
   // Configure WDT
