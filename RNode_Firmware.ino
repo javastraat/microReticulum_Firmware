@@ -486,7 +486,8 @@ void dump_filesystem(const char* basepath, uint8_t level = 0, uint8_t max_level 
   #include "ScotMesh.h"
 #endif
 
-#if MCU_VARIANT == MCU_NRF52
+// Needs the .noinit section only the P1's linker script (nrf52840_s140_v7.ld) provides
+#if BOARD_MODEL == BOARD_SEEED_P1
   #include "FaultDump.h"
 #endif
 
@@ -885,7 +886,9 @@ void setup() {
                (rr & POWER_RESETREAS_OFF_Msk)      ? " wake-from-system-off" : "",
                (rr & POWER_RESETREAS_VBUS_Msk)     ? " vbus-wake" : "");
         if (rr == 0) printf("[init] reset reason: power-on or brown-out\n");
-        fault_dump_print();
+        #if BOARD_MODEL == BOARD_SEEED_P1
+          fault_dump_print();
+        #endif
         printf("[init] usb power %s\n", usb_present ? "present" : "absent (battery)");
       }
     #endif
