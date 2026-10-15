@@ -384,10 +384,91 @@ private:
     TwoWire* _wire;
 };
 
+// Minimal driver for TI current/power monitors on the same bus: INA219,
+// INA226, INA260 and INA3221 (3 channels). They share the 0x40-0x45 address
+// range, so the chip is told apart by its ID registers (TI manufacturer ID
+// 0x5449 at 0xFE plus die ID at 0xFF; the INA219 has neither and is known by
+// its power-on config value). Current is worked out from the shunt voltage,
+// so no calibration register is needed -- only the shunt resistance, 0.1 ohm
+// on the usual breakout modules (ENV_INA_SHUNT_OHMS to change it; the INA260
+// has its own 2 mohm shunt inside). Same full-stop transfers as above.
+#ifndef ENV_INA_SHUNT_OHMS
+  #define ENV_INA_SHUNT_OHMS 0.1f
+#endif
+class INASensor {
+public:
+    enum Kind : uint8_t { NONE, INA219, INA226, INA260, INA3221 };
+
+    bool begin(TwoWire* wire, uint8_t addr) {
+        _wire = wire;
+        _addr = addr;
+        kind = NONE;
+        _wire->beginTransmission(_addr);
+        if (_wire->endTransmission() != 0) return false;
+        uint16_t mfr = 0, die = 0, cfg = 0;
+        if (read16(0xFE, mfr) && mfr == 0x5449 && read16(0xFF, die)) {
+            if ((die & 0xFFF0) == 0x2260) kind = INA226;
+            else if ((die & 0xFFF0) == 0x2270) kind = INA260;
+            else if (die == 0x3220) kind = INA3221;
+        } else if (read16(0x00, cfg) && cfg == 0x399F) kind = INA219;   // power-on default
+        return kind != NONE;
+    }
+
+    uint8_t channels() const { return kind == INA3221 ? 3 : kind == NONE ? 0 : 1; }
+    const char* name() const { return kind == INA219 ? "INA219" : kind == INA226 ? "INA226" : kind == INA260 ? "INA260" : kind == INA3221 ? "INA3221" : "none"; }
+
+    // One channel (0 for single-channel chips). Volts on the bus side, amps
+    // through the shunt (negative = flowing the other way).
+    bool update(uint8_t ch, float& volts, float& amps) {
+        uint16_t sh = 0, bus = 0;
+        switch (kind) {
+            case INA219:
+                if (!read16(0x01, sh) || !read16(0x02, bus)) return false;
+                volts = (bus >> 3) * 0.004f;
+                amps  = (int16_t)sh * 10e-6f / ENV_INA_SHUNT_OHMS;
+                return true;
+            case INA226:
+                if (!read16(0x01, sh) || !read16(0x02, bus)) return false;
+                volts = bus * 1.25e-3f;
+                amps  = (int16_t)sh * 2.5e-6f / ENV_INA_SHUNT_OHMS;
+                return true;
+            case INA260:
+                if (!read16(0x01, sh) || !read16(0x02, bus)) return false;
+                volts = bus * 1.25e-3f;
+                amps  = (int16_t)sh * 1.25e-3f;          // current register, built-in shunt
+                return true;
+            case INA3221:
+                if (ch > 2 || !read16(0x01 + 2 * ch, sh) || !read16(0x02 + 2 * ch, bus)) return false;
+                volts = ((int16_t)bus >> 3) * 8e-3f;
+                amps  = ((int16_t)sh >> 3) * 40e-6f / ENV_INA_SHUNT_OHMS;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    Kind kind = NONE;
+
+private:
+    TwoWire* _wire;
+    uint8_t  _addr;
+
+    bool read16(uint8_t reg, uint16_t& v) {
+        _wire->beginTransmission(_addr);
+        _wire->write(reg);
+        if (_wire->endTransmission() != 0) return false;  // full stop -- nRF52 TWIM hangs on repeated start
+        _wire->requestFrom(_addr, (uint8_t)2);
+        if (_wire->available() < 2) return false;
+        v = ((uint16_t)_wire->read() << 8) | _wire->read();
+        return true;
+    }
+};
+
 // Auto-probes the Grove I2C header for whichever M5Stack ENV unit is
 // plugged in -- ENV I (DHT12 + BMP280), ENV II (SHT30 + BMP280) or ENV III
 // (SHT30 + QMP6988) -- and exposes a single combined reading regardless of
-// which generation is attached.
+// which generation is attached. Also finds up to two INA power monitors
+// (see INASensor), e.g. one on the solar panel and one on the battery.
 namespace EnvSensors {
 
     inline bool humidity_found = false;   // SHT3X or DHT12
@@ -404,6 +485,15 @@ namespace EnvSensors {
     inline float humidity     = NAN;
     inline float pressure_hpa = NAN;
     inline float altitude_m   = NAN;
+
+    // Power monitors: up to 2 chips, up to 4 channels in total (an INA3221
+    // counts 3). read_power() refreshes volts/amps/ok of every channel.
+    struct PowerChannel { uint8_t dev, ch; float volts, amps; bool ok; };
+    inline INASensor    ina[2];
+    inline uint8_t      ina_addr[2] = {0, 0};
+    inline uint8_t      ina_count = 0;
+    inline PowerChannel power[4];
+    inline uint8_t      power_n = 0;
 
     inline void init() {
         RNS::trace("Looking for a Grove environment sensor...");
@@ -432,6 +522,16 @@ namespace EnvSensors {
         } else {
             RNS::trace("No pressure sensor found (QMP6988/BMP280)");
         }
+
+        for (uint8_t a = 0x40; a <= 0x45 && ina_count < 2; a++) {
+            if (a == 0x44 && using_sht3x) continue;     // the SHT30 lives there
+            if (ina[ina_count].begin(&Wire, a)) {
+                ina_addr[ina_count++] = a;
+                RNS::tracef("Found %s power monitor at 0x%02x", ina[ina_count - 1].name(), a);
+            }
+        }
+        for (uint8_t d = 0; d < ina_count; d++)
+            for (uint8_t c = 0; c < ina[d].channels() && power_n < 4; c++) { power[power_n].dev = d; power[power_n].ch = c; power_n++; }
     }
 
     inline bool installed() { return humidity_found || pressure_found; }
@@ -472,6 +572,25 @@ namespace EnvSensors {
         }
 
         return ok;
+    }
+
+    // Label for one power channel: "INA226", or "INA3221/2" for its channel 2.
+    inline const char* power_label(uint8_t i, char* buf, size_t n) {
+        const INASensor& s = ina[power[i].dev];
+        if (s.channels() > 1) snprintf(buf, n, "%s/%u", s.name(), (unsigned)power[i].ch + 1); else snprintf(buf, n, "%s", s.name());
+        return buf;
+    }
+
+    // Reads every power channel. An INA3221 input with nothing connected
+    // (bus under 0.1 V) is marked not ok, so it is left off pages.
+    inline bool read_power() {
+        bool any = false;
+        for (uint8_t i = 0; i < power_n; i++) {
+            PowerChannel& p = power[i];
+            p.ok = ina[p.dev].update(p.ch, p.volts, p.amps) && !(ina[p.dev].kind == INASensor::INA3221 && p.volts < 0.1f);
+            any |= p.ok;
+        }
+        return any;
     }
 
     inline const char* name() {

@@ -224,7 +224,7 @@
 
 <section id="telemetry">
 <h2>Telemetry</h2>
-<p class="lede">Only on boards built with them &mdash; currently the Seeed Solar Node P1. Telemetry needs <code>HAS_ENV_SENSORS</code>, History needs <code>SM_HISTORY</code>.</p>
+<p class="lede">Only on boards built with them. Telemetry needs <code>HAS_ENV_SENSORS</code> (Solar Node P1). History needs <code>SM_HISTORY</code> (Solar Node P1, Heltec V3, Heltec V4). On boards without an environment sensor, or without an MCU temperature reading (the Heltecs), those History lines are simply left out.</p>
 
 <details open>
 <summary><kbd>t</kbd> <code>/page/t.mu</code> &mdash; Telemetry</summary>
@@ -233,6 +233,7 @@
   <li>Temperature, and humidity if a humidity sensor was found</li>
   <li>Pressure + calculated altitude if a pressure sensor was found</li>
   <li>Which exact chips were detected (e.g. "SHT30 + QMP6988")</li>
+  <li>Power monitors on the same Grove port, if fitted: INA219, INA226, INA260 or INA3221 (up to two chips, four readings). One line each with volts, milliamps and watts, e.g. <code>INA226 13.12V 412mA 5.41W</code>; an INA3221 shows its inputs as <code>INA3221/1</code>&ndash;<code>/3</code>, and inputs with nothing connected are left out. Current is worked out for a 0.1&nbsp;&ohm; shunt, as on the usual breakout boards (build flag <code>ENV_INA_SHUNT_OHMS</code> for others). Negative current means it flows the other way, e.g. into the battery</li>
   <li>MCU die temperature, read directly off the nRF52840</li>
   <li>Says plainly if nothing is attached, or the read failed</li>
 </ul>
@@ -258,11 +259,11 @@
 
 <section id="lxmf">
 <h2>LXMF alerts</h2>
-<p class="lede">Only on boards built with <code>SM_LXMF</code> &mdash; currently the Seeed Solar Node P1. The node gets its own LXMF address, so it shows up in Sideband, NomadNet or MeshChat like any other contact, under the node name. It announces that address together with its NomadNet page, on the same interval. The address is also on the About page.</p>
+<p class="lede">Only on boards built with <code>SM_LXMF</code> &mdash; Solar Node P1, Heltec V3 and Heltec V4. The node gets its own LXMF address, so it shows up in Sideband, NomadNet or MeshChat like any other contact, under the node name. It announces that address together with its NomadNet page, on the same interval. The address is also on the About page.</p>
 <ul>
-  <li><b>&ldquo;Running again&rdquo; alert:</b> 2&nbsp;minutes after every restart, all admins get a message saying the node is running again, why it restarted, how many restarts so far, and the battery level. If it restarted because of a crash, that is in it too. Example: <code>Hilltop is running again (watchdog, restart #12, hard fault pc=0002a1f4), battery 64%</code></li>
+  <li><b>&ldquo;Running again&rdquo; alert:</b> 2&nbsp;minutes after every restart, all admins get a message saying the node is running again, why it restarted, how many restarts so far, and the battery level. On the Solar Node P1, a crash (hard fault or uncaught exception) is in it too; the Heltecs give the reset reason only. Example: <code>Hilltop is running again (watchdog, restart #12, hard fault pc=0002a1f4), battery 64%</code></li>
   <li><b>&ldquo;Battery low&rdquo; alert:</b> sent once when the battery, while not charging, drops below the Power page threshold plus 10&nbsp;%. That way you hear about it before the Power page lowers the TX power or turns the radio off. Example with a 25&nbsp;% threshold: at 34&nbsp;% you get <code>Hilltop battery low: 34% 3.61V, not charging</code>. You only get it again after the battery has charged back up to 45&nbsp;% (or starts charging) and then drops again</li>
-  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes and temperature; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages that can't be verified as really coming from that admin (their signature doesn't match)</li>
+  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes, temperature and any power monitor readings; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages that can't be verified as really coming from that admin (their signature doesn't match)</li>
   <li><b>Keys:</b> the node needs an admin's public key to write to them. It saves it when the admin opens any page while identified (the Admins page then shows <code>key</code> next to them); otherwise it uses the admin's own LXMF announce if it has heard one</li>
   <li><b>Delivery:</b> each alert goes out as one encrypted packet straight to the admin's LXMF client. If the node doesn't know a route to the admin yet, it asks the mesh for one first</li>
   <li><b>When the admin is offline:</b> the node keeps trying for 10&nbsp;minutes, then gives up on that alert. It doesn't use a propagation node (an LXMF mailbox that holds messages until you're back), so an alert sent while your client is off is missed</li>
@@ -289,8 +290,8 @@
 <tr><td><code>/api/paths</code></td><td>total, o, cols: [dest,hops,age_s,via], rows: [&hellip;]</td><td>Paginate with <code>?o=</code>/<code>?n=</code>, short hashes with <code>?s=1</code>.</td></tr>
 <tr><td><code>/api/nbrs</code></td><td>total, o, cols: [dest,age_s,name], rows: [&hellip;]</td><td>Same pagination as <code>/api/paths</code>.</td></tr>
 <tr><td><code>/api/all</code></td><td>bat + up + net + airtime, combined</td><td></td></tr>
-<tr><td><code>/api/env</code></td><td>temp, humidity, pressure, altitude, sensor, mcu_temp</td><td>Env-sensor boards only (Solar Node P1). Errors if no sensor is attached.</td></tr>
-<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips that many hours, <code>?n=</code> sets how many rows (default 6, max 24). If the rows don't fit in one packet, fewer are sent and the reply ends with <code>"more":true</code>. Sensors that aren't fitted are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
+<tr><td><code>/api/env</code></td><td>temp, humidity, pressure, altitude, sensor, power: [[label, volts, amps], &hellip;], mcu_temp</td><td>Env-sensor boards only (Solar Node P1). <code>power</code> only when a power monitor is fitted; a failed read gives <code>null</code>s. Errors if neither an environment sensor nor a power monitor is attached.</td></tr>
+<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1, Heltec V3, Heltec V4). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips that many hours, <code>?n=</code> sets how many rows (default 6, max 24). If the rows don't fit in one packet, fewer are sent and the reply ends with <code>"more":true</code>. Sensors that aren't fitted are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
 </tbody>
 </table>
 

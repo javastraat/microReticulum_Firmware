@@ -705,7 +705,14 @@ static std::string sm_status_text() {
   char b[200]; int n = snprintf(b, sizeof b, "%s: %d%% %.2fV%s, up %s, %u neighbours, %u routes", nomadnet_name, sm_pct(), battery_voltage,
     sm_charging() ? " charging" : "", sm_up(), (unsigned)sm_nbrs.size(), (unsigned)RNS::Transport::new_path_table().size());
 #ifdef HAS_ENV_SENSORS
-  if (n > 0 && n < (int)sizeof b && EnvSensors::installed() && EnvSensors::read() && !std::isnan(EnvSensors::temperature)) snprintf(b + n, sizeof b - n, ", %.1fC", EnvSensors::temperature);
+  if (n > 0 && n < (int)sizeof b && EnvSensors::installed() && EnvSensors::read() && !std::isnan(EnvSensors::temperature)) n += snprintf(b + n, sizeof b - n, ", %.1fC", EnvSensors::temperature);
+  if (EnvSensors::power_n && EnvSensors::read_power())
+    for (uint8_t i = 0; i < EnvSensors::power_n && n > 0 && n < (int)sizeof b; i++) {
+      const auto& c = EnvSensors::power[i]; char l[12];
+      if (c.ok) n += snprintf(b + n, sizeof b - n, ", %s %.2fV %.0fmA", EnvSensors::power_label(i, l, sizeof l), c.volts, c.amps * 1000);
+    }
+#else
+  (void)n;
 #endif
   return b;
 }
@@ -1242,6 +1249,12 @@ static void pg_telemetry() {
     if (EnvSensors::pressure_found) P(DIM("Pressure") " %.1fhPa  " DIM("Altitude") " %.0fm\n", EnvSensors::pressure_hpa, EnvSensors::altitude_m);
     P(DIM("Sensor") " %s\n", EnvSensors::name());
   }
+  if (EnvSensors::power_n && EnvSensors::read_power()) {
+    for (uint8_t i = 0; i < EnvSensors::power_n; i++) {
+      const auto& c = EnvSensors::power[i]; char l[12];
+      if (c.ok) P(DIM("%s") " %.2fV %.0fmA %.2fW\n", EnvSensors::power_label(i, l, sizeof l), c.volts, c.amps * 1000, c.volts * c.amps);
+    }
+  }
 #if MCU_VARIANT == MCU_NRF52
   P(DIM("MCU") " %.1fC\n", (double)readCPUTemperature());
 #endif
@@ -1496,12 +1509,23 @@ static void J_net() {
 static void J_ram() { P("\"free_ram\":%u,\"free_flash\":%u", (unsigned)RNS::Utilities::Memory::heap_available(), (unsigned)RNS::Utilities::OS::storage_available()); }
 #ifdef HAS_ENV_SENSORS
 static void J_env() {
-  if (!EnvSensors::installed()) { P("\"error\":\"no sensor\""); return; }
-  EnvSensors::read();
-  P("\"temp\":%.1f", (double)EnvSensors::temperature);
-  if (EnvSensors::humidity_found) P(",\"humidity\":%.1f", (double)EnvSensors::humidity);
-  if (EnvSensors::pressure_found) P(",\"pressure\":%.1f,\"altitude\":%.0f", (double)EnvSensors::pressure_hpa, (double)EnvSensors::altitude_m);
-  P(",\"sensor\":\"%s\"", EnvSensors::name());
+  if (!EnvSensors::installed() && !EnvSensors::power_n) { P("\"error\":\"no sensor\""); return; }
+  if (EnvSensors::installed()) {
+    EnvSensors::read();
+    P("\"temp\":%.1f", (double)EnvSensors::temperature);
+    if (EnvSensors::humidity_found) P(",\"humidity\":%.1f", (double)EnvSensors::humidity);
+    if (EnvSensors::pressure_found) P(",\"pressure\":%.1f,\"altitude\":%.0f", (double)EnvSensors::pressure_hpa, (double)EnvSensors::altitude_m);
+    P(",");
+  }
+  P("\"sensor\":\"%s\"", EnvSensors::name());
+  if (EnvSensors::power_n) {                      // [label, volts, amps] per channel; null when that read failed
+    EnvSensors::read_power(); P(",\"power\":[");
+    for (uint8_t i = 0; i < EnvSensors::power_n; i++) {
+      const auto& c = EnvSensors::power[i]; char l[12]; EnvSensors::power_label(i, l, sizeof l);
+      if (c.ok) P("%s[\"%s\",%.2f,%.3f]", i ? "," : "", l, c.volts, c.amps); else P("%s[\"%s\",null,null]", i ? "," : "", l);
+    }
+    P("]");
+  }
 #if MCU_VARIANT == MCU_NRF52
   P(",\"mcu_temp\":%.1f", (double)readCPUTemperature());
 #endif
