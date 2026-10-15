@@ -1258,6 +1258,17 @@ static void pg_telemetry() {
 #if MCU_VARIANT == MCU_NRF52
   P(DIM("MCU") " %.1fC\n", (double)readCPUTemperature());
 #endif
+  if (EnvSensors::chip_n > 1) {                   // each chip on its own; dropped if the page would not fit
+    for (uint8_t i = 0; i < EnvSensors::chip_n; i++) {
+      const auto& c = EnvSensors::chips[i]; if (!c.ok) continue;
+      size_t at = sm_pn; P(DIM("%s"), EnvSensors::chip_name(c.id));
+      if (!std::isnan(c.t)) P(" %.1fC", c.t);
+      if (!std::isnan(c.h)) P(" %.0f%%", c.h);
+      if (!std::isnan(c.p_hpa)) P(" %.1fhPa", c.p_hpa);
+      P("\n");
+      if (sm_pn > SM_HARD_LIMIT - 26) { pb_cut(at); break; }
+    }
+  }
   PBACK();
 }
 #endif
@@ -1529,6 +1540,18 @@ static void J_env() {
 #if MCU_VARIANT == MCU_NRF52
   P(",\"mcu_temp\":%.1f", (double)readCPUTemperature());
 #endif
+  if (EnvSensors::chip_n > 1) {                   // [name, temp, humidity, pressure] per chip; left out if it would not fit
+    size_t at = sm_pn; P(",\"chips\":[");
+    for (uint8_t i = 0; i < EnvSensors::chip_n; i++) {
+      const auto& c = EnvSensors::chips[i];
+      P("%s[\"%s\"", i ? "," : "", EnvSensors::chip_name(c.id));
+      if (c.ok && !std::isnan(c.t)) P(",%.1f", c.t); else P(",null");
+      if (c.ok && !std::isnan(c.h)) P(",%.1f", c.h); else P(",null");
+      if (c.ok && !std::isnan(c.p_hpa)) P(",%.1f]", c.p_hpa); else P(",null]");
+    }
+    P("]");
+    if (sm_pn > SM_HOME_BUDGET - 2) pb_cut(at);
+  }
 }
 #endif
 static void J_clean(char* s) { for (; *s; s++) if (*s == '"' || *s == '\\') *s = '\''; }
