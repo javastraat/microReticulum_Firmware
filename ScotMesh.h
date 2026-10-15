@@ -23,6 +23,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cmath>
+#include <algorithm>
 
 #include <SHA256.h>
 #include <microReticulum/Transport.h>
@@ -160,7 +161,8 @@ struct SmConfig {
   uint8_t  ann = 3;                      // announce every: 0 30 min, 1 1 h, 2 3 h, 3 6 h, 4 12 h
   uint8_t  upd_wifi = 0;                 // ESP32: next boot opens the WiFi update window instead of the mesh
   char     upd_pw[9] = "";               // its one-time WiFi password
-  uint8_t  reserved[5] = {0};
+  uint8_t  wall[4] = {0};               // last known wall clock, for LXMF message times (SM_LXMF)
+  uint8_t  reserved[1] = {0};
 };
 static SmConfig sm;
 static const char* SM_CFG_PATH = "/scotmesh.cfg";
@@ -384,7 +386,7 @@ void sm_early_boot() {
   if (RNS::Utilities::OS::file_exists(SM_WIPE_PATH)) {
     printf("[scotmesh] full reset: wiping identity, routes, known identities and settings\n");
     for (const char* d : {"./path_store", "./known_store", "./hashlist_store", "./cache"}) sm_wipe_dir(d);
-    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_HIST_PATH, SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
+    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_HIST_PATH, "/scotmesh.key", SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
   }
 #if defined(SCOTMESH_WIFI_UPDATE)
   sm_update_mode();
@@ -597,6 +599,185 @@ static void P_battery() {
   P("`f %d%% %.2fV %s", p, battery_voltage, sm_charging() ? "`F2c5\xE2\x96\xB2`f" : "`Fda3\xE2\x96\xBC`f");
 }
 
+#ifdef SM_LXMF
+// ---------------------------------------------------------------------------
+// LXMF: the node's own lxmf.delivery destination (same identity as the
+// NomadNet node), announced on the same schedule. Admins get single-packet
+// opportunistic messages (back up after a restart, low battery) and can send
+// "status" or "help". No propagation node and no stamps: an alert to an admin
+// whose client is offline is lost, and a client that demands stamps drops it.
+// Wire format: source(16) + signature(64) + msgpack [time, title, content, fields].
+// ---------------------------------------------------------------------------
+static RNS::Destination sm_lxmf({RNS::Type::NONE});
+static uint32_t sm_lxmf_ann_due = 0;
+static char sm_fault_note[40] = "";
+
+// Wall clock for message times, learned from requesters (page requests and
+// incoming messages carry the sender's time). Kept apart from the stack's own
+// clock, which the path table runs on. Saved hourly, so after a restart the
+// last known time is used: a little early, but in the right place in a chat.
+static double sm_wall_off = 0; static uint8_t sm_wall_q = 0;   // 0 unknown, 1 last saved, 2 learned
+static double sm_wall() { return sm_wall_q ? RNS::Utilities::OS::time() + sm_wall_off : 0; }
+static void sm_wall_learn(double t) { if (t > 1.7e9 && t < 4.0e9) { sm_wall_off = t - RNS::Utilities::OS::time(); sm_wall_q = 2; } }
+static void sm_wall_boot() { uint32_t w; memcpy(&w, sm.wall, 4); if (w > 1700000000UL) { sm_wall_off = w - RNS::Utilities::OS::time(); sm_wall_q = 1; } }
+static void sm_wall_save() { if (!sm_wall_q) return; uint32_t w = (uint32_t)sm_wall(); memcpy(sm.wall, &w, 4); sm_save(); }
+
+// Admin public keys, saved when an admin opens a page while identified
+// (80 B each, at most 8), so alerts work without hearing their announce.
+struct SmKey { uint8_t id[16]; uint8_t pub[64]; };
+static std::vector<SmKey> sm_keys; static const char* SM_KEYS_PATH = "/scotmesh.key";
+static void sm_keys_load() {
+  RNS::Bytes b; sm_keys.clear();
+  if (!RNS::Utilities::OS::file_exists(SM_KEYS_PATH) || RNS::Utilities::OS::read_file(SM_KEYS_PATH, b) == 0 || b.size() % sizeof(SmKey)) return;
+  for (size_t i = 0; i < b.size() / sizeof(SmKey) && i < 8; i++) { SmKey k; memcpy(&k, b.data() + i * sizeof(SmKey), sizeof(SmKey)); sm_keys.push_back(k); }
+}
+static const SmKey* sm_key_for(const RNS::Bytes& id) {
+  for (auto& k : sm_keys) if (id.size() == 16 && !memcmp(k.id, id.data(), 16)) return &k;
+  return nullptr;
+}
+static void sm_key_seen(const RNS::Identity& who) {
+  if (!who) return;
+  RNS::Bytes id = who.hash(), pub = who.get_public_key();
+  if (!sm_is_admin(id) || sm_key_for(id) || pub.size() != sizeof(SmKey::pub)) return;
+  sm_keys.erase(std::remove_if(sm_keys.begin(), sm_keys.end(), [](const SmKey& k) { return !sm_is_admin(RNS::Bytes(k.id, 16)); }), sm_keys.end());
+  if (sm_keys.size() >= 8) return;
+  SmKey k; memcpy(k.id, id.data(), 16); memcpy(k.pub, pub.data(), sizeof(k.pub)); sm_keys.push_back(k);
+  RNS::Utilities::OS::write_file(SM_KEYS_PATH, RNS::Bytes((const uint8_t*)sm_keys.data(), sm_keys.size() * sizeof(SmKey)));
+  NOTICEF("[lxmf] saved the key of admin %s", id.toHex().c_str());
+}
+// An admin's lxmf.delivery hash (from the identity hash alone) and identity
+// (saved key, else their own announce); the identity is NONE if neither is known.
+static RNS::Identity sm_admin_identity(const RNS::Bytes& id, RNS::Bytes& dest) {
+  RNS::Bytes m = RNS::Destination::name_hash("lxmf", "delivery"); m.append(id); dest = RNS::Identity::full_hash(m).left(16);
+  if (const SmKey* k = sm_key_for(id)) { RNS::Identity i(false); i.load_public_key(RNS::Bytes(k->pub, sizeof(k->pub))); return i; }
+  return RNS::Identity::recall(dest);
+}
+
+static void mp_bin(std::string& o, const char* p, size_t l) {
+  if (l < 256) { o += (char)0xc4; o += (char)l; } else { o += (char)0xc5; o += (char)(l >> 8); o += (char)l; }
+  o.append(p, l);
+}
+static void sm_lxmf_announce() {
+  if (!sm_lxmf) return;
+  std::string a; a += (char)0x92; mp_bin(a, nomadnet_name, strlen(nomadnet_name)); a += (char)0xc0;   // [display name, no stamp cost]
+  sm_lxmf.announce(RNS::Bytes((const uint8_t*)a.data(), a.size()));
+}
+static bool sm_lxmf_send(const RNS::Identity& to, const RNS::Bytes& dest, const std::string& text) {
+  std::string pl; pl += (char)0x94; mp_f64(pl, sm_wall()); mp_bin(pl, "", 0); mp_bin(pl, text.data(), text.size()); pl += (char)0x80;
+  RNS::Bytes src = sm_lxmf.hash(), payload((const uint8_t*)pl.data(), pl.size());
+  RNS::Bytes hashed = dest; hashed.append(src); hashed.append(payload);
+  RNS::Bytes signed_part = hashed; signed_part.append(RNS::Identity::full_hash(hashed));
+  RNS::Bytes data = src; data.append(RNS::Transport::identity().sign(signed_part)); data.append(payload);
+  if (data.size() > 383) return false;            // one encrypted packet (ENCRYPTED_MDU)
+  RNS::Destination out(to, RNS::Type::Destination::OUT, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
+  RNS::Packet(out, data).send();
+  return true;
+}
+
+// Outbox: at most 6 messages; one is tried every 15 s, asking for a path
+// first, and given up on after 10 minutes.
+struct SmOut { RNS::Bytes id; std::string text; uint8_t tries; };
+static std::vector<SmOut> sm_outbox; static uint32_t sm_out_last = 0;
+static void sm_lxmf_queue(const RNS::Bytes& id, const char* text) {
+  if (sm_outbox.size() >= 6) sm_outbox.erase(sm_outbox.begin());
+  sm_outbox.push_back(SmOut{id, std::string(text).substr(0, 240), 0});
+}
+static void sm_alert(const char* text) {
+  if (!sm_lxmf) return;
+  for (auto& id : RNS::Transport::remote_management_allowed()) sm_lxmf_queue(id, text);
+  NOTICEF("[lxmf] alert: %s", text);
+}
+static void sm_outbox_work(uint32_t now) {
+  if (sm_outbox.empty() || now - sm_out_last < 15000UL || sm_power_sleep) return;
+  sm_out_last = now;
+  SmOut m = sm_outbox.front(); sm_outbox.erase(sm_outbox.begin());
+  RNS::Bytes dest; RNS::Identity to = sm_admin_identity(m.id, dest);
+  if (to && RNS::Transport::has_path(dest)) {
+    if (!sm_lxmf_send(to, dest, m.text)) NOTICEF("[lxmf] message to %s too long, dropped", m.id.toHex().c_str());
+    return;
+  }
+  if (++m.tries >= 40) { NOTICEF("[lxmf] no %s for admin %s, message dropped", to ? "path" : "key", m.id.toHex().c_str()); return; }
+  if (to && m.tries % 8 == 1) RNS::Transport::request_path(dest);
+  sm_outbox.push_back(m);                          // to the back, so one unreachable admin does not hold up the rest
+}
+
+static std::string sm_status_text() {
+  char b[200]; int n = snprintf(b, sizeof b, "%s: %d%% %.2fV%s, up %s, %u neighbours, %u routes", nomadnet_name, sm_pct(), battery_voltage,
+    sm_charging() ? " charging" : "", sm_up(), (unsigned)sm_nbrs.size(), (unsigned)RNS::Transport::new_path_table().size());
+#ifdef HAS_ENV_SENSORS
+  if (n > 0 && n < (int)sizeof b && EnvSensors::installed() && EnvSensors::read() && !std::isnan(EnvSensors::temperature)) snprintf(b + n, sizeof b - n, ", %.1fC", EnvSensors::temperature);
+#endif
+  return b;
+}
+static bool mp_len(const uint8_t* p, size_t n, size_t& i, size_t& len) {   // str or bin header
+  if (i >= n) return false; uint8_t t = p[i++];
+  if ((t & 0xe0) == 0xa0) len = t & 0x1f;
+  else if ((t == 0xc4 || t == 0xd9) && i < n) len = p[i++];
+  else if ((t == 0xc5 || t == 0xda) && i + 1 < n) { len = (p[i] << 8) | p[i + 1]; i += 2; }
+  else return false;
+  return i + len <= n;
+}
+// Incoming message: only admins are answered, and only with a valid signature.
+static void sm_lxmf_rx(const RNS::Bytes& data, const RNS::Packet& packet) {
+  if (data.size() < 80 + 4) return;
+  RNS::Bytes src = data.left(16), sig = data.mid(16, 64), payload = data.mid(80);
+  RNS::Bytes admin, dest; RNS::Identity who({RNS::Type::NONE});
+  for (auto& id : RNS::Transport::remote_management_allowed()) { RNS::Identity i = sm_admin_identity(id, dest); if (dest == src) { admin = id; who = i; break; } }
+  if (!admin) return;
+  if (!who) { NOTICEF("[lxmf] message from admin %s, but no key to check it yet", admin.toHex().c_str()); return; }
+  RNS::Bytes hashed = sm_lxmf.hash(); hashed.append(src); hashed.append(payload);
+  RNS::Bytes signed_part = hashed; signed_part.append(RNS::Identity::full_hash(hashed));
+  if (!who.validate(sig, signed_part)) { NOTICEF("[lxmf] bad signature on a message from %s", admin.toHex().c_str()); return; }
+  const uint8_t* p = payload.data(); size_t n = payload.size(), i = 1, len = 0;
+  if (p[0] != 0x94 && p[0] != 0x95) return;
+  if (p[i] == 0xcb && i + 9 <= n) { uint64_t u = 0; for (int k = 1; k <= 8; k++) u = (u << 8) | p[i + k]; double t; memcpy(&t, &u, 8); sm_wall_learn(t); i += 9; }
+  else if (p[i] == 0xca && i + 5 <= n) i += 5;
+  else return;
+  if (!mp_len(p, n, i, len)) return;
+  i += len;                                         // title
+  if (!mp_len(p, n, i, len)) return;
+  char cmd[16]; size_t c = 0;
+  for (size_t k = 0; k < len && c < sizeof cmd - 1; k++) { char ch = tolower(p[i + k]); if (ch != ' ' && ch != '\n' && ch != '\r') cmd[c++] = ch; }
+  cmd[c] = 0;
+  NOTICEF("[lxmf] admin %s sent \"%s\"", admin.toHex().c_str(), cmd);
+  if (!strcmp(cmd, "status")) sm_lxmf_queue(admin, sm_status_text().c_str());
+  else { char h[96]; snprintf(h, sizeof h, "%s understands: status, help. Alerts: back up after a restart, battery below %u%%.", nomadnet_name, sm.pwr_below + 10); sm_lxmf_queue(admin, h); }
+}
+
+void sm_note_fault(bool exception, uint32_t pc, uint32_t lr) {   // from FaultDump.h at boot
+  if (exception) snprintf(sm_fault_note, sizeof sm_fault_note, ", uncaught exception lr=%08lx", (unsigned long)lr);
+  else snprintf(sm_fault_note, sizeof sm_fault_note, ", hard fault pc=%08lx", (unsigned long)pc);
+}
+static void sm_lxmf_loop(uint32_t now, uint64_t up) {
+  if (!sm_lxmf) return;
+  if (sm_lxmf_ann_due && (int32_t)(now - sm_lxmf_ann_due) >= 0) { sm_lxmf_ann_due = 0; sm_lxmf_announce(); NOTICE("[lxmf] start-up announce"); }
+  static bool boot_sent = false;
+  if (!boot_sent && up > 120000ULL) {              // give the node 2 min to hear paths first
+    boot_sent = true; char b[160];
+    snprintf(b, sizeof b, "%s is back up (%s, restart #%lu%s), battery %d%%%s", nomadnet_name, sm_reset_reason, (unsigned long)sm.reboots, sm_fault_note, sm_pct(), sm_charging() ? " charging" : "");
+    sm_alert(b);
+  }
+  static uint32_t last_bat = 0; static bool low_sent = false;
+  if (now - last_bat > 60000UL && battery_voltage > 0.1) {
+    last_bat = now; int warn = sm.pwr_below + 10;   // ahead of the Power page's own action
+    if (!low_sent && !sm_charging() && sm_pct() < warn) {
+      low_sent = true; char b[96]; snprintf(b, sizeof b, "%s battery low: %d%% %.2fV, not charging", nomadnet_name, sm_pct(), battery_voltage); sm_alert(b);
+    } else if (low_sent && (sm_charging() || sm_pct() >= warn + 10)) low_sent = false;
+  }
+  static uint32_t last_wall = 0;
+  if (now - last_wall > 3600000UL) { last_wall = now; sm_wall_save(); }
+  sm_outbox_work(now);
+}
+#endif
+
+// NomadNet node (and LXMF) announce
+static void sm_announce() {
+  if (nomadnet_destination) nomadnet_destination.announce(RNS::Bytes(nomadnet_name));
+#ifdef SM_LXMF
+  sm_lxmf_announce();
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Pages
 // ---------------------------------------------------------------------------
@@ -774,7 +955,7 @@ static void pg_name(const RNS::Bytes& rid) {
       RNS::Provisioning::Provisioner::instance().field(PROV_NS_GENERAL, PROV_GENERAL_NOMADNET_NAME, RNS::Provisioning::Value(nomadnet_name));
       RNS::Provisioning::Provisioner::instance().commit(PROV_NS_GENERAL);
 #endif
-      if (ch && nomadnet_destination) nomadnet_destination.announce(RNS::Bytes(nomadnet_name));
+      if (ch) sm_announce();
       sm_change(rid, ch ? "renamed node" : "name page saved");
       msg = ch ? "Saved and announced." : "Saved.";
     }
@@ -966,7 +1147,7 @@ static void pg_maint(const RNS::Bytes& rid) {
       uint32_t reboots = sm.reboots; sm = SmConfig(); sm.reboots = reboots; sm_save(); hard_reset();
     }
   }
-  if (!strcmp(a, "an")) { if (nomadnet_destination) nomadnet_destination.announce(RNS::Bytes(nomadnet_name)); sm_change(rid, "announce now"); msg = "Announced."; }
+  if (!strcmp(a, "an")) { sm_announce(); sm_change(rid, "announce now"); msg = "Announced."; }
   if (!strcmp(a, "sc")) { sm.sched = Fis("sm", "d") ? 1 : Fis("sm", "w") ? 2 : 0; sm_save(); sm_change(rid, "auto restart"); msg = "Saved."; }
   Ph("Maintenance"); Pmsg(kind, msg); PL("Announce now", 'x', "a=an");
   P("\n>>Auto restart\n"); PR("sm", "o", sm.sched == 0); P(" Off "); PR("sm", "d", sm.sched == 1); P(" Every day "); PR("sm", "w", sm.sched == 2); P(" Every week "); PL("Save", 'x', "sm|a=sc");
@@ -1041,6 +1222,9 @@ static void pg_about() {
   P(DIM("Transport identity") "\n%s\n", RNS::Transport::identity().hash().toHex().c_str());
   P(DIM("Management") "\n%s\n", hx(RNS::Transport::remote_management_destination()).c_str());
   P(DIM("NomadNet") "\n%s\n", hx(nomadnet_destination).c_str());
+#ifdef SM_LXMF
+  P(DIM("LXMF (alerts)") "\n%s\n", hx(sm_lxmf).c_str());
+#endif
   P(DIM("Probe") "\n%s\n", hx(RNS::Transport::probe_destination()).c_str());
   PBACK();
 }
@@ -1095,7 +1279,11 @@ static void pg_admins(const RNS::Bytes& rid) {
   P("#!c=0\n>Admins " DIM("%u/8") "\n", (unsigned)list.size()); Pmsg(kind, msg);
   for (int i = o; i < (int)list.size() && i < o + 3; i++) {
     std::string h = list[i].toHex();
-    if (list[i] == rid) P("%s `F2c5you`f\n", h.c_str()); else { PLf(h.c_str(), 'k', "a=rm|i=%d", i); P("\n"); }
+    if (list[i] == rid) P("%s `F2c5you`f", h.c_str()); else PLf(h.c_str(), 'k', "a=rm|i=%d", i);
+#ifdef SM_LXMF
+    if (sm_key_for(list[i])) P(" " DIM("key"));
+#endif
+    P("\n");
   }
   if ((int)list.size() > 3) { PLf("more", 'k', "o=%d", o + 3 < (int)list.size() ? o + 3 : 0); P("\n"); }
   if (list.size() < 8) { P(DIM("Add") " "); PF(32, "h", ""); P(" "); PL("Add", 'k', "h|a=ad"); P("\n"); }
@@ -1389,6 +1577,10 @@ static void api_reply(const char* path) {
 RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS::Bytes& request_id, const RNS::Bytes& link_id, const RNS::Identity& remote_identity, double requested_at) {
   char path[24]; size_t pl = path_b.size() < sizeof(path) - 1 ? path_b.size() : sizeof(path) - 1; memcpy(path, path_b.data(), pl); path[pl] = 0;
   RNS::Bytes rid = remote_identity ? remote_identity.hash() : RNS::Bytes{};
+#ifdef SM_LXMF
+  sm_wall_learn(requested_at);
+  if (rid.size()) sm_key_seen(remote_identity);
+#endif
   bool api = !strncmp(path, "/api", 4);
   pb_reset();
   if (RNS::Utilities::Memory::heap_available() < SM_RAM_FLOOR) P(api ? "{\"error\":\"busy\"}" : "#!c=0\n>Busy\nLow on memory, try again later.");
@@ -1448,12 +1640,23 @@ void sm_register(RNS::Destination& dest) {
   sm_disc = RNS::Destination(RNS::Transport::identity(), RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "rnstransport", "discovery.interface");
   sm_disc_due = millis() + 5UL * 60000UL;          // first rmap.world announce 5 min after start
   sm_nn_due = millis() + sm_ann_ms();              // the start-up announce already went out
+#ifdef SM_LXMF
+  sm_lxmf = RNS::Destination(RNS::Transport::identity(), RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
+  sm_lxmf.set_packet_callback(sm_lxmf_rx);
+  sm_lxmf.set_proof_strategy(RNS::Type::Destination::PROVE_ALL);   // the sender sees "delivered"
+  sm_keys_load();
+  sm_lxmf_ann_due = millis() + 60000UL;
+  NOTICEF("[lxmf] alerts from %s", sm_lxmf.hash().toHex().c_str());
+#endif
   NOTICEF("[scotmesh] %u pages/API paths registered, fw %s", (unsigned)(sizeof(SM_PAGE_IDS) + sizeof(SM_API_PATHS) / sizeof(SM_API_PATHS[0])), SCOTMESH_FW_TAG);
 }
 
 // Early boot: settings, start counter, reset reason.
 void sm_boot() {
   sm_load(); sm.reboots++; sm_save();
+#ifdef SM_LXMF
+  sm_wall_boot();
+#endif
 #if MCU_VARIANT == MCU_NRF52
   uint32_t rr = readResetReason();
   sm_reset_reason = rr == 0 ? "power-on" : (rr & POWER_RESETREAS_DOG_Msk) ? "watchdog" : (rr & POWER_RESETREAS_SREQ_Msk) ? "soft-reset" : (rr & POWER_RESETREAS_LOCKUP_Msk) ? "lockup" : (rr & POWER_RESETREAS_RESETPIN_Msk) ? "reset-pin" : (rr & POWER_RESETREAS_OFF_Msk) ? "wake" : "other";
@@ -1503,8 +1706,11 @@ void sm_loop() {
 #ifdef SM_HISTORY
   sm_hist_loop(now);
 #endif
+#ifdef SM_LXMF
+  sm_lxmf_loop(now, up);
+#endif
   // announces
   if (sm.map_on && sm_disc && !sm_disc_busy && sm_disc_due && (int32_t)(now - sm_disc_due) >= 0) { sm_disc_due = now + sm_ann_ms(); sm_disc_start(); }
-  if (sm_nn_due && (int32_t)(now - sm_nn_due) >= 0 && nomadnet_destination) { sm_nn_due = now + sm_ann_ms(); nomadnet_destination.announce(RNS::Bytes(nomadnet_name)); NOTICE("[nomadnet] periodic announce"); }
+  if (sm_nn_due && (int32_t)(now - sm_nn_due) >= 0 && nomadnet_destination) { sm_nn_due = now + sm_ann_ms(); sm_announce(); NOTICE("[nomadnet] periodic announce"); }
   sm_disc_work();
 }

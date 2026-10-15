@@ -49,6 +49,9 @@ namespace __gnu_cxx {
 static void fault_dump_print() {
   if (fault_record.magic != FAULT_RECORD_MAGIC) { printf("[init] fault record: none\n"); return; }
   if (!fault_record.cfsr && !fault_record.hfsr) printf("[init] fault record: uncaught C++ exception\n");
+#if defined(SCOTMESH_PAGES) && defined(SM_LXMF)
+  sm_note_fault(!fault_record.cfsr && !fault_record.hfsr, fault_record.pc, fault_record.lr);   // for the "back up" alert
+#endif
   printf("[init] fault record: cfsr=%08lx hfsr=%08lx bfar=%08lx mmfar=%08lx pc=%08lx lr=%08lx xpsr=%08lx sp=%08lx\n",
          (unsigned long)fault_record.cfsr, (unsigned long)fault_record.hfsr, (unsigned long)fault_record.bfar,
          (unsigned long)fault_record.mmfar, (unsigned long)fault_record.pc, (unsigned long)fault_record.lr,

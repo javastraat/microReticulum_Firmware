@@ -27,6 +27,7 @@
   <span class="menu"><a href="#access">Access</a></span>
   <span class="menu"><a href="#device">Device</a></span>
   <span class="menu"><a href="#telemetry">Telemetry</a></span>
+  <span class="menu"><a href="#lxmf">LXMF alerts</a></span>
   <span class="menu"><a href="#api">JSON API</a></span>
 </nav>
 
@@ -249,6 +250,18 @@
 </ul>
 </details>
 
+</section>
+
+<section id="lxmf">
+<h2>LXMF alerts</h2>
+<p class="lede">Compiled in with <code>SM_LXMF</code> (Solar Node P1). The node gets its own <code>lxmf.delivery</code> address on the same identity as the NomadNet node, announced with the node name on the same interval. Its address is on the About page.</p>
+<ul>
+  <li><b>Alerts to every admin:</b> &ldquo;back up&rdquo; 2&nbsp;minutes after a restart (reset reason, restart count, hard fault or uncaught exception if there was one, battery), and &ldquo;battery low&rdquo; once the battery drops below the Power page threshold + 10&nbsp;% while not charging (re-armed after it recovers by another 10&nbsp;%)</li>
+  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes and temperature; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages whose signature does not check out</li>
+  <li><b>Keys:</b> the node needs an admin's public key to write to them. It saves it when the admin opens any page while identified (the Admins page then shows <code>key</code> next to them); otherwise it uses the admin's own LXMF announce if it has heard one</li>
+  <li><b>Delivery:</b> one encrypted packet straight to the admin, after a path request if needed; retried for 10&nbsp;minutes, then dropped. No propagation node, so an admin who is offline misses it. No stamps: a client that demands stamps from unknown senders will drop the alerts</li>
+  <li><b>Message time:</b> the node has no clock, so it takes the time from page requests and incoming messages, and saves it hourly. After a restart, messages carry the last saved time until it hears a new one</li>
+</ul>
 </section>
 
 <section id="api">
