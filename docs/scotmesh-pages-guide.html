@@ -143,6 +143,7 @@
 <ul>
   <li>Up to 8 admin identity hashes, your own row marked "you"</li>
   <li>Add by pasting a 32-hex identity hash</li>
+  <li>On nodes with LXMF alerts: <code>key</code> after an admin means the node has their public key and can send them alerts</li>
 </ul>
 <p><mark>Removing an admin is confirm-gated; you can't remove the last admin.</mark></p>
 </details>
@@ -216,14 +217,14 @@
 
 <details>
 <summary><kbd>u</kbd> <code>/page/u.mu</code> &mdash; About</summary>
-<p>Firmware tag, board name, transport/management/NomadNet/probe destination hashes.</p>
+<p>Firmware tag, board name, transport/management/NomadNet/probe destination hashes, and on nodes with LXMF alerts the node's LXMF address (the one to add as a contact).</p>
 </details>
 
 </section>
 
 <section id="telemetry">
 <h2>Telemetry</h2>
-<p class="lede">Compiled in only when the board defines <code>HAS_ENV_SENSORS</code> &mdash; currently the Seeed Solar Node P1.</p>
+<p class="lede">Only on boards built with them &mdash; currently the Seeed Solar Node P1. Telemetry needs <code>HAS_ENV_SENSORS</code>, History needs <code>SM_HISTORY</code>.</p>
 
 <details open>
 <summary><kbd>t</kbd> <code>/page/t.mu</code> &mdash; Telemetry</summary>
@@ -239,14 +240,17 @@
 
 <details open>
 <summary><kbd>z</kbd> <code>/page/z.mu</code> &mdash; History</summary>
-<p>Compiled in with <code>SM_HISTORY</code> (Solar Node P1). A sample every 10&nbsp;minutes, averaged into one record an hour; 7&nbsp;days are kept on the QSPI flash and survive restarts. Linked from the Admin hub. The first sample is taken 1&nbsp;minute after start; until the first hour is stored the page shows the hour in progress (samples so far and their averages). Records are only written per full hour, so a node stuck restarting cannot push the stored week out.</p>
+<p>Battery, sensor and mesh readings over the last 7&nbsp;days. Linked from the Admin hub.</p>
+<p>The node takes a reading every 10&nbsp;minutes and saves the average of each hour as one record. It keeps the last 7&nbsp;days (168 hours) in its flash memory, so they survive restarts.</p>
+<p>The first reading is taken 1&nbsp;minute after start. Until the first hour is saved, the page shows the hour so far: how many readings, and their averages.</p>
+<p>A record is only saved once the node has run a full hour. If the node keeps restarting every few minutes (for example on an almost empty battery), it saves nothing, so the week already stored is not pushed out by short runs.</p>
 <ul>
-  <li>24&nbsp;h battery sparkline, oldest to newest; an amber <code>|</code> marks a restart (the time the node was off is unknown, so the bars just continue)</li>
-  <li>Battery now, the 24&nbsp;h min&ndash;max, and the biggest drop while not charging (e.g. <code>-14%/11h</code> overnight)</li>
+  <li>A small bar chart of the battery over the last 24&nbsp;hours, one bar per hour, oldest on the left. An amber <code>|</code> marks a restart. The node can't tell how long it was off, so the bars continue right after it</li>
+  <li>Battery now, the lowest and highest of the last 24&nbsp;hours, and the biggest drop while not charging (e.g. <code>-14%/11h</code>: 14&nbsp;% lost over 11&nbsp;hours, typically overnight)</li>
   <li>Battery min&ndash;max for each of the last 7 days, newest first</li>
   <li>Sensor temperature 24&nbsp;h and 7&nbsp;d min/max, MCU temperature, humidity range and the pressure trend</li>
-  <li>Neighbours and routes now, the 24&nbsp;h neighbour peak</li>
-  <li>Lines that would not fit in one LoRa packet are left out, battery lines first to stay</li>
+  <li>Neighbours and routes now, and the most neighbours seen in the last 24&nbsp;hours</li>
+  <li>The page must fit in one LoRa packet. If it would be too long, the lines at the bottom are left out; the battery lines at the top always stay</li>
 </ul>
 </details>
 
@@ -254,12 +258,15 @@
 
 <section id="lxmf">
 <h2>LXMF alerts</h2>
-<p class="lede">Compiled in with <code>SM_LXMF</code> (Solar Node P1). The node gets its own <code>lxmf.delivery</code> address on the same identity as the NomadNet node, announced with the node name on the same interval. Its address is on the About page.</p>
+<p class="lede">Only on boards built with <code>SM_LXMF</code> &mdash; currently the Seeed Solar Node P1. The node gets its own LXMF address, so it shows up in Sideband, NomadNet or MeshChat like any other contact, under the node name. It announces that address together with its NomadNet page, on the same interval. The address is also on the About page.</p>
 <ul>
-  <li><b>Alerts to every admin:</b> &ldquo;back up&rdquo; 2&nbsp;minutes after a restart (reset reason, restart count, hard fault or uncaught exception if there was one, battery), and &ldquo;battery low&rdquo; once the battery drops below the Power page threshold + 10&nbsp;% while not charging (re-armed after it recovers by another 10&nbsp;%)</li>
-  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes and temperature; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages whose signature does not check out</li>
+  <li><b>&ldquo;Running again&rdquo; alert:</b> 2&nbsp;minutes after every restart, all admins get a message saying the node is running again, why it restarted, how many restarts so far, and the battery level. If it restarted because of a crash, that is in it too. Example: <code>Hilltop is running again (watchdog, restart #12, hard fault pc=0002a1f4), battery 64%</code></li>
+  <li><b>&ldquo;Battery low&rdquo; alert:</b> sent once when the battery, while not charging, drops below the Power page threshold plus 10&nbsp;%. That way you hear about it before the Power page lowers the TX power or turns the radio off. Example with a 25&nbsp;% threshold: at 34&nbsp;% you get <code>Hilltop battery low: 34% 3.61V, not charging</code>. You only get it again after the battery has charged back up to 45&nbsp;% (or starts charging) and then drops again</li>
+  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes and temperature; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages that can't be verified as really coming from that admin (their signature doesn't match)</li>
   <li><b>Keys:</b> the node needs an admin's public key to write to them. It saves it when the admin opens any page while identified (the Admins page then shows <code>key</code> next to them); otherwise it uses the admin's own LXMF announce if it has heard one</li>
-  <li><b>Delivery:</b> one encrypted packet straight to the admin, after a path request if needed; retried for 10&nbsp;minutes, then dropped. No propagation node, so an admin who is offline misses it. No stamps: a client that demands stamps from unknown senders will drop the alerts</li>
+  <li><b>Delivery:</b> each alert goes out as one encrypted packet straight to the admin's LXMF client. If the node doesn't know a route to the admin yet, it asks the mesh for one first</li>
+  <li><b>When the admin is offline:</b> the node keeps trying for 10&nbsp;minutes, then gives up on that alert. It doesn't use a propagation node (an LXMF mailbox that holds messages until you're back), so an alert sent while your client is off is missed</li>
+  <li><b>Stamps:</b> some clients have an anti-spam setting that requires unknown senders to add a &ldquo;stamp&rdquo; (a small proof of work). The node doesn't make stamps, so with that setting on, its alerts are silently dropped. Turn the setting off, or mark the node as a trusted contact if your client allows that</li>
   <li><b>Message time:</b> the node has no clock, so it takes the time from page requests and incoming messages, and saves it hourly. After a restart, messages carry the last saved time until it hears a new one</li>
 </ul>
 </section>
@@ -283,7 +290,7 @@
 <tr><td><code>/api/nbrs</code></td><td>total, o, cols: [dest,age_s,name], rows: [&hellip;]</td><td>Same pagination as <code>/api/paths</code>.</td></tr>
 <tr><td><code>/api/all</code></td><td>bat + up + net + airtime, combined</td><td></td></tr>
 <tr><td><code>/api/env</code></td><td>temp, humidity, pressure, altitude, sensor, mcu_temp</td><td>Env-sensor boards only (Solar Node P1). Errors if no sensor is attached.</td></tr>
-<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips hours, <code>?n=</code> rows (default 6, max 24, cut to one packet with <code>more</code>). Missing sensors are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
+<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips that many hours, <code>?n=</code> sets how many rows (default 6, max 24). If the rows don't fit in one packet, fewer are sent and the reply ends with <code>"more":true</code>. Sensors that aren't fitted are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
 </tbody>
 </table>
 

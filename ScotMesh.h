@@ -603,7 +603,7 @@ static void P_battery() {
 // ---------------------------------------------------------------------------
 // LXMF: the node's own lxmf.delivery destination (same identity as the
 // NomadNet node), announced on the same schedule. Admins get single-packet
-// opportunistic messages (back up after a restart, low battery) and can send
+// opportunistic messages (running again after a restart, low battery) and can send
 // "status" or "help". No propagation node and no stamps: an alert to an admin
 // whose client is offline is lost, and a client that demands stamps drops it.
 // Wire format: source(16) + signature(64) + msgpack [time, title, content, fields].
@@ -741,7 +741,7 @@ static void sm_lxmf_rx(const RNS::Bytes& data, const RNS::Packet& packet) {
   cmd[c] = 0;
   NOTICEF("[lxmf] admin %s sent \"%s\"", admin.toHex().c_str(), cmd);
   if (!strcmp(cmd, "status")) sm_lxmf_queue(admin, sm_status_text().c_str());
-  else { char h[96]; snprintf(h, sizeof h, "%s understands: status, help. Alerts: back up after a restart, battery below %u%%.", nomadnet_name, sm.pwr_below + 10); sm_lxmf_queue(admin, h); }
+  else { char h[176]; snprintf(h, sizeof h, "%s understands: status, help. Alerts: running again after a restart, battery below %u%%.", nomadnet_name, sm.pwr_below + 10); sm_lxmf_queue(admin, h); }
 }
 
 void sm_note_fault(bool exception, uint32_t pc, uint32_t lr) {   // from FaultDump.h at boot
@@ -754,7 +754,7 @@ static void sm_lxmf_loop(uint32_t now, uint64_t up) {
   static bool boot_sent = false;
   if (!boot_sent && up > 120000ULL) {              // give the node 2 min to hear paths first
     boot_sent = true; char b[160];
-    snprintf(b, sizeof b, "%s is back up (%s, restart #%lu%s), battery %d%%%s", nomadnet_name, sm_reset_reason, (unsigned long)sm.reboots, sm_fault_note, sm_pct(), sm_charging() ? " charging" : "");
+    snprintf(b, sizeof b, "%s is running again (%s, restart #%lu%s), battery %d%%%s", nomadnet_name, sm_reset_reason, (unsigned long)sm.reboots, sm_fault_note, sm_pct(), sm_charging() ? " charging" : "");
     sm_alert(b);
   }
   static uint32_t last_bat = 0; static bool low_sent = false;
