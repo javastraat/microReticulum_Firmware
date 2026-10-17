@@ -869,9 +869,9 @@ static void pg_home(const RNS::Bytes& rid) {
     if (admin) { PL("Admin", 'a'); P("\n"); }
     else if (rid.size() && sm.pw_on && !preview) { PL("Register", 'l'); P("\n"); }
     if (!preview) P_verified(rid);
-    P("-\n`c");                                      // `c toggles and carries over lines (Micron): once for the block, `a after
+    P("-\n`c");                                      // `c toggles and carries over lines (Micron): once for the whole block
     if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
-    P("%s ScotMesh microReticulum\n%s " MIDDOT " %s`a", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);
+    P("%s ScotMesh microReticulum\n%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);   // last on the page: no `a (it would un-centre this line)
     if (sm_pn <= SM_HOME_BUDGET || pass == 4) break;
     dropped |= order[pass];
   }
