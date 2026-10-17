@@ -118,6 +118,7 @@
   #define SM_API_HIST_NAME ""
 #endif
 
+#define SM_UPDATE_IP     "10.73.73.1"   // WiFi update window address (sm_update_mode)
 #define SM_HOME_BUDGET   400
 #define SM_HARD_LIMIT    409      // 431 B link MDU minus response framing
 #define SM_RAM_FLOOR     8192     // below this, answer "busy" instead of building
@@ -418,19 +419,32 @@ void sm_update_mode() {
   if (!sm.upd_wifi) return;
   char pw[9]; memcpy(pw, sm.upd_pw, 9); pw[8] = 0;
   sm.upd_wifi = 0; memset(sm.upd_pw, 0, sizeof sm.upd_pw); sm_save();       // one boot only, even if this one crashes
-  printf("[update] WiFi update window: SSID ScotMesh-Update, 20 min\n");
-  WiFi.mode(WIFI_AP); WiFi.softAP("ScotMesh-Update", pw); delay(200);
+  printf("[update] WiFi update window: SSID ScotMesh-Update, http://" SM_UPDATE_IP ", 20 min\n");
+  // 10.73.73.1 rather than the ESP32 default 192.168.4.1, which home networks
+  // often use too (a laptop on both cannot reach the node). 73: "best regards".
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(IPAddress(10, 73, 73, 1), IPAddress(10, 73, 73, 1), IPAddress(255, 255, 255, 0));
+  WiFi.softAP("ScotMesh-Update", pw); delay(200);
   static WebServer srv(80); static bool done = false, failed = false; static size_t got = 0;
   static const char* page =
-    "<!doctype html><meta name=viewport content='width=device-width'><title>ScotMesh node update</title>"
+    "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>ScotMesh node update</title>"
     "<body style='font:16px system-ui;max-width:32em;margin:2em auto;padding:0 1em'><h2>" BOARD_SHORT_NAME " \xc2\xb7 " SCOTMESH_FW_TAG "</h2>"
     "<p>Choose the <b>.bin</b> from inside the release zip (rnode_firmware_&hellip;.bin) and press Update. Keep this page open; the node restarts by itself when done.</p>"
-    "<form method=POST action=/update enctype=multipart/form-data><input type=file name=fw accept=.bin required> <button>Update</button></form>"
-    "<p style='color:#666'>This window closes 20 minutes after it opened.</p>";
-  srv.on("/", HTTP_GET, []() { srv.send(200, "text/html", page); });
+    "<form id=f method=POST action=/update enctype=multipart/form-data><input type=file name=fw accept=.bin required> <button id=b>Update</button></form>"
+    "<p><progress id=p max=100 value=0 style='width:100%' hidden></progress><br><span id=t></span></p>"
+    "<p style='color:#666'>This window closes 20 minutes after it opened.</p>"
+    // Progress from the browser's own upload counter; without JS the plain form still works.
+    "<script>f.onsubmit=function(e){e.preventDefault();var x=new XMLHttpRequest();x.open('POST','/update');"
+    "x.upload.onprogress=function(e){if(e.lengthComputable){var c=Math.round(e.loaded*100/e.total);p.value=c;"
+    "t.textContent=c+'%  ('+(e.loaded/1048576).toFixed(2)+' of '+(e.total/1048576).toFixed(2)+' MB)';}};"
+    "x.upload.onload=function(){t.textContent='Upload complete, the node is verifying the image...';};"
+    "x.onload=function(){if(x.status==200)document.body.innerHTML=x.responseText;else t.textContent=x.responseText;};"
+    "x.onerror=function(){t.textContent='Connection lost. If your computer left the ScotMesh-Update WiFi, rejoin it and reload this page.';b.disabled=false;};"
+    "x.send(new FormData(f));b.disabled=true;p.hidden=false;t.textContent='Starting upload...';};</script>";
+  srv.on("/", HTTP_GET, []() { srv.send(200, "text/html; charset=utf-8", page); });
   srv.on("/update", HTTP_POST, []() {
     if (failed) { srv.send(500, "text/plain", "Update failed: " + String(Update.errorString()) + ". The node restarts unchanged; open a new window from its page to try again."); delay(1500); hard_reset(); }
-    srv.send(200, "text/html", "<!doctype html><body style='font:16px system-ui;margin:2em'><h2>Updated.</h2><p>Written and verified; the node is restarting into the new firmware now. You can reconnect your phone to its usual WiFi.</p>");
+    srv.send(200, "text/html; charset=utf-8", "<!doctype html><body style='font:16px system-ui;margin:2em'><h2>Updated.</h2><p>Written and verified; the node is restarting into the new firmware now. You can reconnect your phone to its usual WiFi.</p>");
     done = true;
   }, []() {
     HTTPUpload& up = srv.upload();
@@ -1243,7 +1257,7 @@ static void pg_update(const RNS::Bytes& rid) {
   bool power_ok = battery_percent >= 30 || sm_charging() || battery_voltage < 0.1;
   if (!strcmp(a, "cw") && sm_has_ota_slot()) {
     if (!power_ok) { Ph("Firmware update"); Pmsg('b', "Battery low and not charging."); P(DIM("Needs 30%% or a charger.") "\n"); PL("Back", 'm'); return; }
-    Ph("WiFi update window?"); P("Restarts as a WiFi access point for\n20 min, off the mesh. Someone in range\nuploads the .bin from the release zip\nat http://192.168.4.1\n`Fda3Someone must be within WiFi range.`f\n\n");
+    Ph("WiFi update window?"); P("Restarts as a WiFi access point for\n20 min, off the mesh. Someone in range\nuploads the .bin from the release zip\nat http://" SM_UPDATE_IP "\n`Fda3Someone must be within WiFi range.`f\n\n");
     PLf("Yes, start", 'm', "a=dw|k=%s", sm_token("cw")); P("\n" DIM("This link works once, for 2 min.")); return;
   }
   if (!strcmp(a, "dw") && sm_has_ota_slot()) {
@@ -1252,7 +1266,7 @@ static void pg_update(const RNS::Bytes& rid) {
       RNS::Bytes r = RNS::Cryptography::random(8);
       for (int i = 0; i < 8; i++) sm.upd_pw[i] = "abcdefghjkmnpqrstuvwxyz23456789"[r.data()[i] % 31];
       sm.upd_pw[8] = 0; sm.upd_wifi = 1; sm_save(); sm_change(rid, "WiFi update window");
-      P("#!c=0\n`F2c5Update window opens in a few seconds.`f\nWiFi: ScotMesh-Update\nPassword: %s\nThen open http://192.168.4.1\n" DIM("Write the password down: it is shown once."), sm.upd_pw);
+      P("#!c=0\n`F2c5Update window opens in a few seconds.`f\nWiFi: ScotMesh-Update\nPassword: %s\nThen open http://" SM_UPDATE_IP "\n" DIM("Write the password down: it is shown once."), sm.upd_pw);
       sm_dfu_action = 1; sm_dfu_action_at = millis(); return;
     }
   }
