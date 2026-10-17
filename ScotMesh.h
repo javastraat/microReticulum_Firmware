@@ -628,6 +628,13 @@ static void P_battery() {
 // ---------------------------------------------------------------------------
 static RNS::Destination sm_lxmf({RNS::Type::NONE});
 static uint32_t sm_lxmf_ann_due = 0;
+// What happened last, for the About page (and the log): the Logs page is too
+// short-lived to catch an LXMF exchange.
+static char sm_lxmf_last[56] = "nothing yet"; static uint16_t sm_lxmf_rx_n = 0, sm_lxmf_tx_n = 0;
+static void sm_lxmf_event(const char* fmt, ...) {
+  va_list a; va_start(a, fmt); vsnprintf(sm_lxmf_last, sizeof sm_lxmf_last, fmt, a); va_end(a);
+  NOTICEF("[lxmf] %s", sm_lxmf_last);
+}
 static char sm_fault_note[40] = "";
 
 // Wall clock for message times, learned from requesters (page requests and
@@ -711,10 +718,12 @@ static void sm_outbox_work(uint32_t now) {
   SmOut m = sm_outbox.front(); sm_outbox.erase(sm_outbox.begin());
   RNS::Bytes dest; RNS::Identity to = sm_admin_identity(m.id, dest);
   if (to && RNS::Transport::has_path(dest)) {
-    if (!sm_lxmf_send(to, dest, m.text)) NOTICEF("[lxmf] message to %s too long, dropped", m.id.toHex().c_str());
+    if (sm_lxmf_send(to, dest, m.text)) { sm_lxmf_tx_n++; sm_lxmf_event("sent to %.8s", m.id.toHex().c_str()); }
+    else sm_lxmf_event("too long for %.8s, dropped", m.id.toHex().c_str());
     return;
   }
-  if (++m.tries >= 40) { NOTICEF("[lxmf] no %s for admin %s, message dropped", to ? "path" : "key", m.id.toHex().c_str()); return; }
+  if (m.tries == 0) sm_lxmf_event("no %s for %.8s yet, retrying", to ? "path" : "key", m.id.toHex().c_str());
+  if (++m.tries >= 40) { sm_lxmf_event("no %s for %.8s, dropped", to ? "path" : "key", m.id.toHex().c_str()); return; }
   if (to && m.tries % 8 == 1) RNS::Transport::request_path(dest);
   sm_outbox.push_back(m);                          // to the back, so one unreachable admin does not hold up the rest
 }
@@ -742,32 +751,44 @@ static bool mp_len(const uint8_t* p, size_t n, size_t& i, size_t& len) {   // st
   else return false;
   return i + len <= n;
 }
-// Incoming message: only admins are answered, and only with a valid signature.
-static void sm_lxmf_rx(const RNS::Bytes& data, const RNS::Packet& packet) {
-  if (data.size() < 80 + 4) return;
+// Incoming message (source + signature + payload): only admins are answered,
+// and only with a valid signature.
+static void sm_lxmf_handle(const RNS::Bytes& data) {
+  sm_lxmf_rx_n++;
+  if (data.size() < 80 + 4) { sm_lxmf_event("message too short (%u B)", (unsigned)data.size()); return; }
   RNS::Bytes src = data.left(16), sig = data.mid(16, 64), payload = data.mid(80);
   RNS::Bytes admin, dest; RNS::Identity who({RNS::Type::NONE});
   for (auto& id : RNS::Transport::remote_management_allowed()) { RNS::Identity i = sm_admin_identity(id, dest); if (dest == src) { admin = id; who = i; break; } }
-  if (!admin) return;
-  if (!who) { NOTICEF("[lxmf] message from admin %s, but no key to check it yet", admin.toHex().c_str()); return; }
+  if (!admin) { sm_lxmf_event("from non-admin %.8s, ignored", src.toHex().c_str()); return; }
+  if (!who) { sm_lxmf_event("from %.8s, no key to check it", admin.toHex().c_str()); return; }
   RNS::Bytes hashed = sm_lxmf.hash(); hashed.append(src); hashed.append(payload);
   RNS::Bytes signed_part = hashed; signed_part.append(RNS::Identity::full_hash(hashed));
-  if (!who.validate(sig, signed_part)) { NOTICEF("[lxmf] bad signature on a message from %s", admin.toHex().c_str()); return; }
+  if (!who.validate(sig, signed_part)) { sm_lxmf_event("bad signature from %.8s (%02x)", admin.toHex().c_str(), payload.data()[0]); return; }
   const uint8_t* p = payload.data(); size_t n = payload.size(), i = 1, len = 0;
-  if (p[0] != 0x94 && p[0] != 0x95) return;
+  if (p[0] != 0x94 && p[0] != 0x95) { sm_lxmf_event("unknown format %02x from %.8s", p[0], admin.toHex().c_str()); return; }
   if (p[i] == 0xcb && i + 9 <= n) { uint64_t u = 0; for (int k = 1; k <= 8; k++) u = (u << 8) | p[i + k]; double t; memcpy(&t, &u, 8); sm_wall_learn(t); i += 9; }
   else if (p[i] == 0xca && i + 5 <= n) i += 5;
-  else return;
-  if (!mp_len(p, n, i, len)) return;
+  else { sm_lxmf_event("no timestamp (%02x) from %.8s", p[i], admin.toHex().c_str()); return; }
+  if (!mp_len(p, n, i, len)) { sm_lxmf_event("bad title field from %.8s", admin.toHex().c_str()); return; }
   i += len;                                         // title
-  if (!mp_len(p, n, i, len)) return;
+  if (!mp_len(p, n, i, len)) { sm_lxmf_event("bad content field from %.8s", admin.toHex().c_str()); return; }
   char cmd[16]; size_t c = 0;
   for (size_t k = 0; k < len && c < sizeof cmd - 1; k++) { char ch = tolower(p[i + k]); if (ch != ' ' && ch != '\n' && ch != '\r') cmd[c++] = ch; }
   cmd[c] = 0;
-  NOTICEF("[lxmf] admin %s sent \"%s\"", admin.toHex().c_str(), cmd);
+  sm_lxmf_event("%.8s sent \"%s\", reply queued", admin.toHex().c_str(), cmd);
   if (!strcmp(cmd, "status")) sm_lxmf_queue(admin, sm_status_text().c_str());
   else { char h[176]; snprintf(h, sizeof h, "%s understands: status, help. Alerts: running again after a restart, battery below %u%%.", nomadnet_name, sm.pwr_below + 10); sm_lxmf_queue(admin, h); }
 }
+
+// Two ways a message arrives: opportunistic, one packet to the destination
+// (its own address is implied), or "direct" over a Link, as MeshChat and
+// Sideband send by default, where the packed message starts with our address.
+static void sm_lxmf_rx(const RNS::Bytes& data, const RNS::Packet&) { sm_lxmf_handle(data); }
+static void sm_lxmf_link_rx(const RNS::Bytes& data, const RNS::Packet&) {
+  if (data.size() > 16 && data.left(16) == sm_lxmf.hash()) sm_lxmf_handle(data.mid(16));
+  else sm_lxmf_event("link packet not a message (%u B)", (unsigned)data.size());
+}
+static void sm_lxmf_link(RNS::Link& link) { link.set_packet_callback(sm_lxmf_link_rx); sm_lxmf_event("link opened, waiting for a message"); }
 
 void sm_note_fault(bool exception, uint32_t pc, uint32_t lr) {   // from FaultDump.h at boot
   if (exception) snprintf(sm_fault_note, sizeof sm_fault_note, ", uncaught exception lr=%08lx", (unsigned long)lr);
@@ -848,9 +869,9 @@ static void pg_home(const RNS::Bytes& rid) {
     if (admin) { PL("Admin", 'a'); P("\n"); }
     else if (rid.size() && sm.pw_on && !preview) { PL("Register", 'l'); P("\n"); }
     if (!preview) P_verified(rid);
-    P("-\n");
-    if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("`c%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
-    P("`c%s ScotMesh microReticulum\n`c%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);
+    P("-\n`c");                                      // `c toggles and carries over lines (Micron): once for the block, `a after
+    if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
+    P("%s ScotMesh microReticulum\n%s " MIDDOT " %s`a", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);
     if (sm_pn <= SM_HOME_BUDGET || pass == 4) break;
     dropped |= order[pass];
   }
@@ -1261,6 +1282,7 @@ static void pg_about() {
   P(DIM("NomadNet") "\n%s\n", hx(nomadnet_destination).c_str());
 #ifdef SM_LXMF
   P(DIM("LXMF (alerts)") "\n%s\n", hx(sm_lxmf).c_str());
+  P(DIM("LXMF in %u, out %u, last:") "\n%s\n", sm_lxmf_rx_n, sm_lxmf_tx_n, sm_lxmf_last);
 #endif
   P(DIM("Probe") "\n%s\n", hx(RNS::Transport::probe_destination()).c_str());
   PBACK();
@@ -1720,6 +1742,7 @@ void sm_register(RNS::Destination& dest) {
 #ifdef SM_LXMF
   sm_lxmf = RNS::Destination(RNS::Transport::identity(), RNS::Type::Destination::IN, RNS::Type::Destination::SINGLE, "lxmf", "delivery");
   sm_lxmf.set_packet_callback(sm_lxmf_rx);
+  sm_lxmf.set_link_established_callback(sm_lxmf_link);   // "direct" delivery
   sm_lxmf.set_proof_strategy(RNS::Type::Destination::PROVE_ALL);   // the sender sees "delivered"
   sm_keys_load();
   sm_lxmf_ann_due = millis() + 60000UL;

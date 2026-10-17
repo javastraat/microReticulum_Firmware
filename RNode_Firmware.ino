@@ -259,7 +259,7 @@ void sm_log_line(const char* msg);
 #endif
 void on_log(const char* msg, RNS::LogLevel level) {
 #if defined(URTN_STATS_PAGES) && !defined(SCOTMESH_NO_PAGES)
-  sm_log_line(msg);
+  if (level <= RNS::LOG_NOTICE) sm_log_line(msg);   // the Logs page keeps 5 lines: trace chatter would push them out at once
 #endif
   if (kiss_framed_logs) {
     // Compose "<timestamp> [<level>] <msg>" into a stack buffer to avoid
