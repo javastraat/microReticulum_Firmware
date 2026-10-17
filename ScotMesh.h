@@ -168,7 +168,25 @@ static SmConfig sm;
 static const char* SM_CFG_PATH = "/scotmesh.cfg";
 static const char* SM_LOG_PATH = "/scotmesh.chg";
 static const char* SM_HIST_PATH = "/scotmesh.hst";   // telemetry history (SM_HISTORY)
+static const char* SM_LOC_PATH = "/scotmesh.loc";    // local footer line (own file: SmConfig has no room left)
 static void sm_save() { RNS::Utilities::OS::write_file(SM_CFG_PATH, RNS::Bytes((const uint8_t*)&sm, sizeof(sm))); }
+// Optional local line above the ScotMesh credit on the home page: a country
+// flag (from a 2-letter code) and a short text, both set on the Name page.
+struct SmLocal { char cc[3]; char text[25]; };
+static SmLocal sm_loc{};
+static void sm_loc_save() { RNS::Utilities::OS::write_file(SM_LOC_PATH, RNS::Bytes((const uint8_t*)&sm_loc, sizeof(sm_loc))); }
+static void sm_loc_load() {
+  RNS::Bytes b;
+  if (RNS::Utilities::OS::file_exists(SM_LOC_PATH) && RNS::Utilities::OS::read_file(SM_LOC_PATH, b) == sizeof(sm_loc)) {
+    memcpy(&sm_loc, b.data(), sizeof(sm_loc)); sm_loc.cc[2] = 0; sm_loc.text[sizeof(sm_loc.text) - 1] = 0;
+  }
+}
+// "NL" -> the flag emoji: two regional indicator symbols (U+1F1E6 + letter), 8 bytes UTF-8
+static const char* sm_flag_of(const char* cc, char* out) {   // out: 9 bytes
+  if (strlen(cc) != 2 || cc[0] < 'A' || cc[0] > 'Z' || cc[1] < 'A' || cc[1] > 'Z') { out[0] = 0; return out; }
+  for (int i = 0; i < 2; i++) { out[i * 4] = '\xF0'; out[i * 4 + 1] = '\x9F'; out[i * 4 + 2] = '\x87'; out[i * 4 + 3] = (char)(0xA6 + cc[i] - 'A'); }
+  out[8] = 0; return out;
+}
 static void sm_load() {
   RNS::Bytes b;
   if (RNS::Utilities::OS::file_exists(SM_CFG_PATH) && RNS::Utilities::OS::read_file(SM_CFG_PATH, b) == sizeof(sm)) {
@@ -386,7 +404,7 @@ void sm_early_boot() {
   if (RNS::Utilities::OS::file_exists(SM_WIPE_PATH)) {
     printf("[scotmesh] full reset: wiping identity, routes, known identities and settings\n");
     for (const char* d : {"./path_store", "./known_store", "./hashlist_store", "./cache"}) sm_wipe_dir(d);
-    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_HIST_PATH, "/scotmesh.key", SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
+    for (const char* f : {"./transport_identity", "./destination_table", "./tunnels", SM_CFG_PATH, SM_LOG_PATH, SM_HIST_PATH, SM_LOC_PATH, "/scotmesh.key", SM_WIPE_PATH}) if (RNS::Utilities::OS::file_exists(f)) RNS::Utilities::OS::remove_file(f);
   }
 #if defined(SCOTMESH_WIFI_UPDATE)
   sm_update_mode();
@@ -830,7 +848,9 @@ static void pg_home(const RNS::Bytes& rid) {
     if (admin) { PL("Admin", 'a'); P("\n"); }
     else if (rid.size() && sm.pw_on && !preview) { PL("Register", 'l'); P("\n"); }
     if (!preview) P_verified(rid);
-    P("-\n`c%s ScotMesh microReticulum\n`c%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);
+    P("-\n");
+    if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("`c%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
+    P("`c%s ScotMesh microReticulum\n`c%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);
     if (sm_pn <= SM_HOME_BUDGET || pass == 4) break;
     dropped |= order[pass];
   }
@@ -951,6 +971,15 @@ static void pg_device() {
 static void pg_name(const RNS::Bytes& rid) {
   const char* msg = nullptr; char kind = 'o';
   if (Vis("a", "s")) {
+    char cc[3] = {0}; const char* cf = Fv("cf");
+    for (int i = 0, k = 0; cf[i] && k < 2; i++) if (isalpha((unsigned char)cf[i])) cc[k++] = toupper((unsigned char)cf[i]);
+    if (cc[0] && !cc[1]) cc[0] = 0;                   // one letter is no country code
+    if (Qhas("field_cf") || Qhas("field_ft")) {
+      memcpy(sm_loc.cc, cc, sizeof(cc));
+      strncpy(sm_loc.text, Fv("ft"), sizeof(sm_loc.text) - 1); sm_loc.text[sizeof(sm_loc.text) - 1] = 0;
+      for (int i = strlen(sm_loc.text) - 1; i >= 0 && sm_loc.text[i] == ' '; i--) sm_loc.text[i] = 0;
+      sm_loc_save();
+    }
     char nm[33]; strncpy(nm, Fv("n"), 32); nm[32] = 0; for (int i = strlen(nm) - 1; i >= 0 && nm[i] == ' '; i--) nm[i] = 0;
     if (!nm[0]) { msg = "Name must be 1-32 characters."; kind = 'b'; }
     else {
@@ -971,7 +1000,8 @@ static void pg_name(const RNS::Bytes& rid) {
   Ph("Name & announce"); Pmsg(kind, msg);
   P("Name     "); PF(32, "n", nomadnet_name); P("\nOperator "); PF(22, "o", sm.op); P("\nAnnounce every");
   for (int i = 0; i < 5; i++) { P(" "); PR("ai", AV[i], sm.ann == i); P("%s", AL[i]); }
-  P("\n"); PL("Save", 'n', "n|o|ai|a=s"); P("   "); PBACK();
+  P("\nFlag     "); PF(2, "cf", sm_loc.cc); P(" " DIM("country code, e.g. NL") "\nFooter   "); PF(24, "ft", sm_loc.text);
+  P("\n"); PL("Save", 'n', "n|o|ai|cf|ft|a=s"); P("   "); PBACK();
 }
 
 static void pg_homelayout(const RNS::Bytes& rid) {
@@ -1700,7 +1730,7 @@ void sm_register(RNS::Destination& dest) {
 
 // Early boot: settings, start counter, reset reason.
 void sm_boot() {
-  sm_load(); sm.reboots++; sm_save();
+  sm_load(); sm.reboots++; sm_save(); sm_loc_load();
 #ifdef SM_LXMF
   sm_wall_boot();
 #endif
