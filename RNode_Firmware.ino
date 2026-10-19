@@ -2933,6 +2933,9 @@ void loop() {
 
   #if HAS_INPUT
     input_read();
+    #if BOARD_MODEL == BOARD_HELTEC32_V4
+      v4_button_poll();
+    #endif
   #endif
 
 #ifdef SCOTMESH_PAGES
@@ -3013,6 +3016,98 @@ void sleep_now() {
   #endif
 }
 
+#if BOARD_MODEL == BOARD_HELTEC32_V4
+// Heltec V4 is typically a roof-mounted, physically unattended repeater, so the
+// shared button scheme's hold-to-deep-sleep (old 700-5000ms tier, sleep_now())
+// is dropped here: an accidental/vibration-triggered hold up there would need
+// someone to climb up and power-cycle it to recover. Short-click Bluetooth
+// toggle/pairing was already dead on this board anyway (HAS_BLUETOOTH is
+// false for BOARD_HELTEC32_V4 -- see Boards.h), so repurposing that range
+// costs nothing. The >10000ms serial-console escape hatch is kept as-is
+// (HAS_CONSOLE is true here and it's a genuinely useful recovery path).
+//
+// New scheme while the screen is already on:
+//   < 700ms (single click)  -> deferred: toggle the display, UNLESS a second
+//                              click arrives within the window below (then
+//                              it's a double click instead)
+//   < 700ms (double click)  -> send one announce right now
+//   700-10000ms (hold)      -> send a burst of 5 announces, 2s apart
+// Screen already blanked: any press (any duration) just wakes it, same as
+// every other board's shared path.
+#define V4_DOUBLE_CLICK_WINDOW_MS 400
+#define V4_BURST_INTERVAL_MS 2000
+#define V4_BURST_COUNT 5
+static bool v4_click_pending = false;
+static unsigned long v4_click_release_at = 0;
+static uint8_t v4_burst_remaining = 0;
+static unsigned long v4_burst_next_at = 0;
+
+static void v4_send_announce_now() {
+  #ifdef URTN_STATS_PAGES
+    if (nomadnet_enabled && nomadnet_destination) {
+      nomadnet_destination.announce(RNS::Bytes(nomadnet_name));
+      NOTICE("[button] manual announce sent");
+    }
+  #endif
+}
+
+static void v4_toggle_display() {
+  if (display_blanked) {
+    display_unblank();
+  } else {
+    // Backdating last_unblank_event (rather than a separate forced-blank
+    // flag) makes the very next update_display() tick blank on its own,
+    // through the exact same path the idle timeout already uses. Only takes
+    // effect while display blanking is enabled in provisioning -- a known,
+    // accepted gap for the rare case it's been turned off there.
+    last_unblank_event = millis() - display_blanking_timeout - 1;
+    display_blanked = true;
+    update_display(true);
+  }
+}
+
+void button_event(uint8_t event, unsigned long duration) {
+  if (display_blanked) { display_unblank(); return; }
+  if (duration > 10000) {
+    #if HAS_CONSOLE
+      console_active = true;
+      console_start();
+    #endif
+    return;
+  }
+  if (duration >= 700) {
+    v4_click_pending = false; // a hold is never part of a click pair
+    v4_burst_remaining = V4_BURST_COUNT;
+    v4_burst_next_at = millis(); // first one fires on the very next poll tick
+    return;
+  }
+  if (v4_click_pending && millis() - v4_click_release_at < V4_DOUBLE_CLICK_WINDOW_MS) {
+    v4_click_pending = false;
+    v4_send_announce_now();
+  } else {
+    v4_click_pending = true;
+    v4_click_release_at = millis();
+  }
+}
+
+// Called once per loop() iteration: resolves a deferred single click once the
+// double-click window has passed without a second click, and pumps the
+// announce burst without blocking the radio/watchdog loop (same non-blocking
+// due-timestamp convention sm_loop() already uses for its own periodic
+// announce in ScotMesh.h).
+void v4_button_poll() {
+  unsigned long now = millis();
+  if (v4_click_pending && now - v4_click_release_at >= V4_DOUBLE_CLICK_WINDOW_MS) {
+    v4_click_pending = false;
+    v4_toggle_display();
+  }
+  if (v4_burst_remaining && (int32_t)(now - v4_burst_next_at) >= 0) {
+    v4_send_announce_now();
+    v4_burst_remaining--;
+    v4_burst_next_at = now + V4_BURST_INTERVAL_MS;
+  }
+}
+#else
 void button_event(uint8_t event, unsigned long duration) {
   #if MCU_VARIANT == MCU_ESP32 || MCU_VARIANT == MCU_NRF52 || MCU_VARIANT == MCU_NATIVE
     if (display_blanked) {
@@ -3050,6 +3145,7 @@ void button_event(uint8_t event, unsigned long duration) {
     }
   #endif
 }
+#endif
 
 volatile bool serial_polling = false;
 void serial_poll() {
