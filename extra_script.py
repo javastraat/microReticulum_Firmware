@@ -86,6 +86,11 @@ def post_upload(source, target, env):
         # device provisioning is incomplete and only currently appropriate for 915MHz T-Beam
         #device_wipe(env)
         device_provision(env)
+        # Provisioning leaves the ESP32-S3's USB-CDC port mid-reset/re-enumeration
+        # (same class of behavior as esptool's own hard reset) -- without a
+        # settle delay here, the firmware-hash call below races it and gets
+        # "RNode did not respond." Matches the nordicnrf52 branch's delay below.
+        time.sleep(5)
         firmware_hash(source, env)
         # firmware pacakaging is incomplete due to missing console image
         #firmware_package(env)
