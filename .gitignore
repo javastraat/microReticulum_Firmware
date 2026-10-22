@@ -18,3 +18,4 @@ docker/workspace/*
 Release/rnode_firmware_*.zip
 Release/rnode_firmware_*.uf2
 Release/*_debug.zip
+TODO.md

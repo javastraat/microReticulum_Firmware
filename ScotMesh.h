@@ -1797,6 +1797,36 @@ void sm_boot() {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Stale-link watchdog -- microReticulum's own Link::start_watchdog() is an
+// unimplemented stub upstream (confirmed in both this env's git-pinned fork
+// and RTNode-HeltecV4's vendored copy -- see TODO.md), so nothing ever
+// expires an inactive Link. Every NomadNet request opens one; a client that
+// never sends LINKCLOSE (closed app, out of RF range, crash) leaves it
+// allocated forever -- confirmed cause of live memory growth on the techinc
+// repeater. Implemented here rather than patching the library, since this
+// env fetches it fresh via git on every dependency refresh (platformio.ini)
+// -- everything needed is already public API.
+//
+// No real keepalive probing: this node is almost always the destination
+// side (NomadNet clients open links to us), so a pure inactivity timeout is
+// the right tradeoff -- we're not the side responsible for keeping a link
+// warm. teardown()/status(set) aren't const methods, and std::set elements
+// are always const on iteration (an STL ordering-invariant rule, not a
+// microReticulum one -- true even over a local non-const copy of the set),
+// so each Link has to be copied out individually via its copy constructor
+// to get a mutable handle -- still the same underlying shared object.
+// ---------------------------------------------------------------------------
+static void sm_links_watchdog() {
+  for (const auto& ref : RNS::Transport::active_links()) {
+    RNS::Link link = ref;
+    if (link.status() == RNS::Type::Link::CLOSED) continue;   // Transport's own sweep reaps it
+    double idle = link.inactive_for();
+    if (idle > RNS::Type::Transport::LINK_TIMEOUT) link.teardown();
+    else if (idle > RNS::Type::Link::STALE_TIME) link.status(RNS::Type::Link::STALE);
+  }
+}
+
 // Called every loop pass.
 void sm_loop() {
   uint32_t now = millis(); uint64_t up = sm_uptime_ms();
@@ -1832,6 +1862,9 @@ void sm_loop() {
     if (low && sm.pwr_act == 1 && !sm_power_limited && lora_txp > 10) { sm_saved_txp = lora_txp; lora_txp = 10; setTXPower(); sm_power_limited = true; NOTICE("[power] low battery, TX power lowered"); }
     else if (sm_power_limited && recovered) { lora_txp = sm_saved_txp; setTXPower(); sm_power_limited = false; NOTICE("[power] battery recovered, TX power restored"); }
   }
+  // stale-link watchdog, every 30s -- cheap against a 900s (LINK_TIMEOUT) threshold
+  static uint32_t last_links_check = 0;
+  if (now - last_links_check > 30000UL) { last_links_check = now; sm_links_watchdog(); }
 #ifdef SM_HISTORY
   sm_hist_loop(now);
 #endif
