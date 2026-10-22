@@ -2,8 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- Grove-port sensor support on the Solar Node P1: SHT4x, SHTC3, AHT10/20, BME280, BME680, BMP180, M5 ENV I/II/III, and INA219/INA226/INA260/INA3221 power monitors, plus the nRF52840's own die temperature — all on the Telemetry page and `/api/env`.
+- 7-day telemetry history (battery, sensors, mesh) with a History page and `/api/hist` endpoint.
+- LXMF alerts to admins (restart recovery, low battery) and a `status` command, from the node's own announced LXMF address.
+- Optional flag and footer line on the NomadNet home page, set per node on the Name & announce page.
+- Cached neighbour names shown next to hashes on the NomadNet Routes/Neighbours pages, with short hash for named rows and short-by-default.
+- Opt-in power-saving build flags for ESP32 boards (160 MHz underclock + loop-yield idle gating), enabled for Heltec V4.
+
+### Fixed
+
+- Closed stale/abandoned Reticulum Links after 15 minutes idle — the library's `Link::start_watchdog()` is an unimplemented stub upstream, so a NomadNet client that never sent `LINKCLOSE` leaked memory forever.
+- ESP32 post-upload firmware-hash write no longer races the provisioning step's USB-CDC reset (5s settle delay added).
+- RAK4631 and T-Echo builds link again (hard-fault dump now Solar Node P1 only).
+- Dropped the libstdc++ demangler (~32 KB flash) by recording uncaught C++ exceptions in the fault record instead.
+- Home page footer centering now uses one `` `c `` for the block instead of per-line.
+
 ### Changed
 
+- Heltec V4 button: hold-to-sleep removed (unsafe on a roof-mounted repeater); single click toggles the display, double click announces, hold sends a 5x announce burst.
+- WiFi update window moved to `10.73.73.1`, clear of common home-network ranges, with upload progress and a clear message if the connection drops.
+- History page shows the first hour live from 1 minute after boot instead of staying empty for an hour.
 - **Provisioning wire format** — reworked the wire protocol for lower LoRa airtime and fewer round-trips. Breaking change from the previous format:
     - `GET_STATE` now returns `{Values, Drafts?, Hash}`; the `Draft` request flag folds drafts into the same response.
     - `GET_STATE` supports a `PriorHash` short-circuit: clients echo the previous response's `Hash` back, and the server responds `{Unchanged: true}` when state hasn't changed.
