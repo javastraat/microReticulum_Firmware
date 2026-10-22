@@ -493,6 +493,10 @@ void dump_filesystem(const char* basepath, uint8_t level = 0, uint8_t max_level 
 
 void setup() {
 
+  #if defined(RTNODE_CPU_MHZ) && MCU_VARIANT == MCU_ESP32
+    setCpuFrequencyMhz(RTNODE_CPU_MHZ);
+  #endif
+
   #if MCU_VARIANT == MCU_NRF52 && defined(URTN_STATS_PAGES) && !defined(SCOTMESH_NO_PAGES)
     sm_dfu_window = (NRF_POWER->GPREGRET2 == SM_DFU_MAGIC);
     NRF_POWER->GPREGRET2 = 0;
@@ -503,6 +507,10 @@ void setup() {
   fifo_init(&serialFIFO, serialBuffer, CONFIG_UART_BUFFER_SIZE);
 
   Serial.begin(serial_baudrate);
+
+  #if defined(RTNODE_CPU_MHZ) && MCU_VARIANT == MCU_ESP32
+    Serial.printf("[power] CPU clock %u MHz\r\n", (unsigned)getCpuFrequencyMhz());
+  #endif
 
   // Redirect stdout to KISS framed logs
   install_kiss_stdout();
@@ -2960,6 +2968,13 @@ void loop() {
       kiss_indicate_error(ERROR_MEMORY_LOW); memory_low = false;
     #endif
   }
+
+  #if defined(RTNODE_LOOP_SLEEP_MS) && MCU_VARIANT == MCU_ESP32
+    // Block for a tick instead of spinning: the idle task then clock-gates the
+    // CPU (WAITI) between passes. Received packets are read out by the radio ISR
+    // as they arrive, so a 1 ms pause only delays their processing by <=1 ms.
+    vTaskDelay(pdMS_TO_TICKS(RTNODE_LOOP_SLEEP_MS));
+  #endif
 }
 
 void sleep_now() {
