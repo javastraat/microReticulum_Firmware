@@ -894,29 +894,44 @@ static void pg_home(const RNS::Bytes& rid) {
 
 // Routes (path table) and neighbours: rows until the row count or the byte budget runs out.
 struct SmListCtx { bool shrt; int o, n, seen, rows; bool more; double now; size_t limit; };
+// Only names routes whose destination is also a cached direct neighbour (see
+// SmAnnounceWatch above) -- multi-hop destinations never had their app_data
+// captured, so they still fall back to the bare hash.
+static const char* sm_nbr_name(const RNS::Bytes& id) {
+  for (auto& n : sm_nbrs) if (n.id == id) return n.name;
+  return nullptr;
+}
 static bool sm_route_row(const RNS::Bytes& k, uint8_t hops, double heard, const RNS::Bytes&, void* vc) {
   SmListCtx& c = *(SmListCtx*)vc;
   if (c.seen++ < c.o) return true;
   if (c.rows >= c.n) { c.more = true; return false; }
-  char age[8]; std::string h = k.toHex(); if (c.shrt) h.resize(8);
-  size_t before = sm_pn; P("%s %u %s\n", h.c_str(), hops, sm_age(c.now - heard, age));
+  char age[8]; const char* name = sm_nbr_name(k);
+  std::string h = k.toHex(); if (c.shrt || (name && name[0])) h.resize(8);
+  size_t before = sm_pn;
+  if (name && name[0]) P("%s %u %s %s\n", h.c_str(), hops, sm_age(c.now - heard, age), name);
+  else P("%s %u %s\n", h.c_str(), hops, sm_age(c.now - heard, age));
   if (sm_pn > c.limit) { pb_cut(before); c.more = true; return false; }
   c.rows++; return true;
 }
 static void pg_list(bool routes, const RNS::Bytes& rid) {
   if (!(sm.home & SMH_ROUTES) && !sm_is_admin(rid)) { pg_denied(rid); return; }
   char pg = routes ? 'r' : 'b';
-  bool form = Vis("a", "1"), shrt = form ? Fis("s", "1") : Vis("s", "1");
+  bool form = Vis("a", "1");
+  // Default to short hashes (less airtime per page) unless the request says
+  // otherwise -- "s" absent entirely means a fresh link/first load (no
+  // choice made yet), vs "s=0" meaning the user explicitly unchecked Short
+  // on a prior submit or pagination link, which must stick.
+  bool shrt = form ? Fis("s", "1") : (Vv("s")[0] ? Vis("s", "1") : true);
   int n = atoi(form ? Fv("n") : Vv("n")); if (n < 1 || n > 30) n = 10;
   int o = atoi(Vv("o")); if (o < 0) o = 0;
   size_t total = routes ? RNS::Transport::new_path_table().size() : sm_nbrs.size();
-  if (routes) P("#!c=0\n>Routes " DIM("%u " MIDDOT " hops " MIDDOT " heard") "\n", (unsigned)total);
+  if (routes) P("#!c=0\n>Routes " DIM("%u " MIDDOT " hops " MIDDOT " heard " MIDDOT " name?") "\n", (unsigned)total);
   else P("#!c=0\n>Neighbours " DIM("heard " MIDDOT " name") "\n");
   SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0))};   // room for the footer (+ back link)
   if (routes) sm_walk_paths(sm_route_row, &c);
   else for (size_t i = o; i < sm_nbrs.size(); i++) {
     if (c.rows >= n) { c.more = true; break; }
-    char age[8]; std::string h = sm_nbrs[i].id.toHex(); if (shrt) h.resize(8);
+    char age[8]; std::string h = sm_nbrs[i].id.toHex(); if (shrt || sm_nbrs[i].name[0]) h.resize(8);
     size_t before = sm_pn; P("%s %s%s%s\n", h.c_str(), sm_age(c.now - sm_nbrs[i].heard, age), sm_nbrs[i].name[0] ? " " : "", sm_nbrs[i].name);
     if (sm_pn > c.limit) { pb_cut(before); c.more = true; break; }
     c.rows++;
