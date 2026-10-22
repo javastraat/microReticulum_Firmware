@@ -1835,6 +1835,17 @@ void transmit(uint16_t size) {
           }
 
           add_airtime(written);
+          // A receiver needs real turnaround time between frames -- its own
+          // hardware IRQ has to fire, get polled, get parsed, and only then
+          // does it re-arm RX. With back-to-back beginPacket() calls here
+          // (no gap at all), frame 2's preamble can start before the
+          // receiver is listening again, and a missed preamble means the
+          // whole frame is lost, not just delayed -- confirmed as the cause
+          // of a reply never completing reassembly on a real receiver
+          // (ratspeak-handheld D1L), 100% reproducible despite strong
+          // signal, every time. Paced here rather than relying on every
+          // possible receiver being fast enough.
+          delay(20);
           LoRa->beginPacket();
           LoRa->write(header);
           written = 1;
