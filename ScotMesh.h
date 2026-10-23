@@ -258,7 +258,7 @@ void sm_link_seen(const RNS::Bytes& raw, const RNS::Interface& iface) {
   const uint8_t* r = raw.data(); size_t n = raw.size();
   if (n < 19 || (r[0] & 0x80)) return;                                                           // 0x80: IFAC-masked header
   if ((r[0] & 0x40) && (r[0] & 3) == RNS::Type::Packet::ANNOUNCE && n >= 35) {                  // rebroadcast announce: r+2 is its sender
-    float rssi = iface ? iface.r_stat_rssi() : NAN; if (isnan(rssi)) return;
+    float rssi = iface ? iface.r_stat_rssi() : NAN; if (isnan(rssi) || rssi >= 0) return;   // >= 0: the SX126x status read came back empty
     SmRelay* e = &sm_relays[0];
     for (auto& s : sm_relays) { if (!memcmp(s.id, r + 2, 16)) { e = &s; break; } if (s.at < e->at) e = &s; }
     memcpy(e->id, r + 2, 16); e->rssi = (int16_t)rssi; e->at = millis() | 1;
@@ -271,7 +271,8 @@ void sm_link_seen(const RNS::Bytes& raw, const RNS::Interface& iface) {
   for (auto& s : sm_ls) { if (!memcmp(s.id, r + off, 16)) { e = &s; break; } if (s.at < e->at) e = &s; }
   memcpy(e->id, r + off, 16); e->hops = r[1] < 255 ? r[1] + 1 : 255; e->at = millis() | 1;
   float rssi = iface ? iface.r_stat_rssi() : NAN, snr = iface ? iface.r_stat_snr() : NAN;
-  e->sig = !isnan(rssi) && !isnan(snr); e->rssi = e->sig ? (int16_t)rssi : 0; e->snr = e->sig ? snr : 0;
+  e->sig = !isnan(snr); e->snr = e->sig ? snr : 0;
+  e->rssi = !isnan(rssi) && rssi < 0 ? (int16_t)rssi : 0;   // 0 = no reading: the SX126x status read can come back empty (-0/2 dBm)
 }
 static const SmLinkSeen* sm_link_find(const RNS::Bytes& link_id) {
   if (link_id.size() != 16) return nullptr;
@@ -896,7 +897,11 @@ static void pg_denied(const RNS::Bytes& rid) {
 // hop (the visitor's own only at 1 hop; otherwise the repeater that delivered it).
 static void P_link(const SmLinkSeen* l, bool admin = false) {   // the home page leaves out "last hop" to stay within budget
   if (l->hops == 1) P(DIM("Your link") " direct"); else P(DIM("Your link") " %u hops", l->hops);
-  if (l->sig) P(", %s%d dBm / SNR %.1f dB", admin && l->hops > 1 ? "last hop " : "", l->rssi, l->snr);
+  if (l->sig) {
+    P(", %s", admin && l->hops > 1 ? "last hop " : "");
+    if (l->rssi) P("%d dBm / ", l->rssi);
+    P("SNR %.1f dB", l->snr);
+  }
   P("\n");
 }
 static void pg_home(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
@@ -1075,7 +1080,7 @@ static void pg_hub(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
   if (const SmLinkSeen* l = sm_link_find(link_id)) {   // the admin home view usually runs over budget and drops it
     P_link(l, true);
     if (l->hops > 1) {
-      bool guessed; RNS::Bytes t = sm_last_hop(rid, l->rssi, l->sig, guessed);
+      bool guessed; RNS::Bytes t = sm_last_hop(rid, l->rssi, l->rssi != 0, guessed);
       P(DIM("Last hop") " ");
       if (!t) P(DIM("unknown") "\n");
       else { P_relay_name(t); P(guessed ? "? " DIM("by signal") "\n" : " " DIM("from path table") "\n"); }
