@@ -256,6 +256,7 @@ RNS::Interface udp_interface(RNS::Type::NONE);
 // CBA logger callback
 #if defined(URTN_STATS_PAGES) && !defined(SCOTMESH_NO_PAGES)
 void sm_log_line(const char* msg);
+void sm_link_seen(const RNS::Bytes& raw, const RNS::Interface& interface);
 #endif
 void on_log(const char* msg, RNS::LogLevel level) {
 #if defined(URTN_STATS_PAGES) && !defined(SCOTMESH_NO_PAGES)
@@ -294,6 +295,9 @@ void on_log(const char* msg, RNS::LogLevel level) {
 
 // CBA receive packet callback
 void on_receive_packet(const RNS::Bytes& raw, const RNS::Interface& interface) {
+#if defined(URTN_STATS_PAGES) && !defined(SCOTMESH_NO_PAGES)
+  sm_link_seen(raw, interface);   // hops + signal per link, for the home page's "Your link" line
+#endif
 #ifdef HAS_SDCARD
   TRACE("Logging receive packet to SD");
   String line = RNS::getTimeString() + String(" recv: ") + String(raw.toHex().c_str()) + "\n";

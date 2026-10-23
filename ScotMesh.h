@@ -141,7 +141,7 @@ extern RNS::Interface lora_interface;
 // ---------------------------------------------------------------------------
 // Persisted settings (own small file; provisioning keeps name/role/admins)
 // ---------------------------------------------------------------------------
-enum : uint8_t { SMH_BAT = 1, SMH_UP = 2, SMH_RADIO = 4, SMH_PATHS = 8, SMH_AIR = 16, SMH_OP = 32, SMH_ROUTES = 64 };
+enum : uint8_t { SMH_BAT = 1, SMH_UP = 2, SMH_RADIO = 4, SMH_PATHS = 8, SMH_AIR = 16, SMH_OP = 32, SMH_ROUTES = 64, SMH_NOLINK = 128 };   // NOLINK is inverted: set hides the line, so existing configs show it
 struct SmConfig {
   uint32_t magic = 0x31434D53;           // "SMC1"
   uint8_t  home = SMH_BAT | SMH_UP | SMH_PATHS | SMH_OP | SMH_ROUTES;
@@ -213,6 +213,16 @@ struct SmFail { RNS::Bytes id; uint8_t n; uint32_t lock_until; };
 static std::vector<SmFail> sm_fails;                 // max 8
 static uint32_t sm_global_fails[10] = {0}; static uint8_t sm_gf_next = 0; static uint32_t sm_reg_paused_until = 0;
 static char sm_last_attempt[16] = "";
+// Hop count and signal of the last packet heard on each link, for the visitor's
+// "Your link" line on the home page. Read straight from the raw header in the
+// receive-packet hook (sm_link_seen), so the library needs no change.
+struct SmLinkSeen { uint8_t id[16]; uint8_t hops; bool sig; int16_t rssi; float snr; uint32_t at; };
+static SmLinkSeen sm_ls[8] = {};
+// Repeaters heard directly, with their signal: a rebroadcast announce (HEADER_2)
+// carries the transport id of the node that just sent it. Used to guess a
+// link's last hop by signal when the path table can't tell (Admin page).
+struct SmRelay { uint8_t id[16]; int16_t rssi; uint32_t at; };
+static SmRelay sm_relays[8] = {};
 static const uint16_t SM_ANN_MIN[] = {30, 60, 180, 360, 720};
 static uint32_t sm_ann_ms() { return (uint32_t)SM_ANN_MIN[sm.ann > 4 ? 3 : sm.ann] * 60000UL; }
 
@@ -239,6 +249,34 @@ void sm_log_line(const char* msg) {
   strncpy(sm_log_ring[sm_log_next], msg, sizeof(sm_log_ring[0]) - 1); sm_log_ring[sm_log_next][sizeof(sm_log_ring[0]) - 1] = 0;
   for (char* p = sm_log_ring[sm_log_next]; *p; p++) if (*p == '`' || *p == '\n' || *p == '\r') *p = ' ';
   sm_log_next = (sm_log_next + 1) % 5; if (sm_log_count < 5) sm_log_count++;
+}
+
+// Every inbound packet (fed from on_receive_packet, before Transport handles it).
+// Only link packets count: their destination hash is the link id. raw[1] is the
+// hop count as sent; Transport adds 1 on arrival, so a direct packet is 1 hop.
+void sm_link_seen(const RNS::Bytes& raw, const RNS::Interface& iface) {
+  const uint8_t* r = raw.data(); size_t n = raw.size();
+  if (n < 19 || (r[0] & 0x80)) return;                                                           // 0x80: IFAC-masked header
+  if ((r[0] & 0x40) && (r[0] & 3) == RNS::Type::Packet::ANNOUNCE && n >= 35) {                  // rebroadcast announce: r+2 is its sender
+    float rssi = iface ? iface.r_stat_rssi() : NAN; if (isnan(rssi)) return;
+    SmRelay* e = &sm_relays[0];
+    for (auto& s : sm_relays) { if (!memcmp(s.id, r + 2, 16)) { e = &s; break; } if (s.at < e->at) e = &s; }
+    memcpy(e->id, r + 2, 16); e->rssi = (int16_t)rssi; e->at = millis() | 1;
+    return;
+  }
+  if (((r[0] >> 2) & 3) != RNS::Type::Destination::LINK) return;
+  size_t off = (r[0] & 0x40) ? 18 : 2;                                                           // HEADER_2 carries a transport id first
+  if (n < off + 17) return;
+  SmLinkSeen* e = &sm_ls[0];
+  for (auto& s : sm_ls) { if (!memcmp(s.id, r + off, 16)) { e = &s; break; } if (s.at < e->at) e = &s; }
+  memcpy(e->id, r + off, 16); e->hops = r[1] < 255 ? r[1] + 1 : 255; e->at = millis() | 1;
+  float rssi = iface ? iface.r_stat_rssi() : NAN, snr = iface ? iface.r_stat_snr() : NAN;
+  e->sig = !isnan(rssi) && !isnan(snr); e->rssi = e->sig ? (int16_t)rssi : 0; e->snr = e->sig ? snr : 0;
+}
+static const SmLinkSeen* sm_link_find(const RNS::Bytes& link_id) {
+  if (link_id.size() != 16) return nullptr;
+  for (auto& s : sm_ls) if (s.at && !memcmp(s.id, link_id.data(), 16)) return &s;
+  return nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -842,7 +880,11 @@ static void sm_announce() {
 // Pages
 // ---------------------------------------------------------------------------
 static const char* SM_FLAG = "\xF0\x9F\x8F\xB4\xF3\xA0\x81\xA7\xF3\xA0\x81\xA2\xF3\xA0\x81\xB3\xF3\xA0\x81\xA3\xF3\xA0\x81\xB4\xF3\xA0\x81\xBF";
-static void P_verified(const RNS::Bytes& rid) { if (rid.size()) P("\xF0\x9F\x9B\xA1\xEF\xB8\x8F Verified identity: %s\n", rid.toHex().c_str()); else P(DIM("Not identified") "\n"); }
+static void P_verified(const RNS::Bytes& rid, bool shrt = false) {   // shrt: admin home view, tight budget (full hash on the Admin page)
+  if (!rid.size()) { P(DIM("Not identified") "\n"); return; }
+  std::string h = rid.toHex(); if (shrt) h.resize(8);
+  P("\xF0\x9F\x9B\xA1\xEF\xB8\x8F Verified identity: %s\n", h.c_str());
+}
 static void pg_denied(const RNS::Bytes& rid) {
   Ph("Admins only");
   if (rid.size()) { P("Not on this node's admin list:\n" DIM("%s") "\n", rid.toHex().c_str()); if (sm.pw_on) { PL("Register with a password", 'l'); P("\n"); } }
@@ -850,11 +892,19 @@ static void pg_denied(const RNS::Bytes& rid) {
   PL("Home", 'I');
 }
 
-static void pg_home(const RNS::Bytes& rid) {
+// Visitor's own link: hops as counted on arrival, plus the signal of the last
+// hop (the visitor's own only at 1 hop; otherwise the repeater that delivered it).
+static void P_link(const SmLinkSeen* l, bool admin = false) {   // the home page leaves out "last hop" to stay within budget
+  if (l->hops == 1) P(DIM("Your link") " direct"); else P(DIM("Your link") " %u hops", l->hops);
+  if (l->sig) P(", %s%d dBm / SNR %.1f dB", admin && l->hops > 1 ? "last hop " : "", l->rssi, l->snr);
+  P("\n");
+}
+static void pg_home(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
   bool preview = Vis("v", "1"), admin = sm_is_admin(rid) && !preview;
-  static const uint8_t order[] = {SMH_AIR, SMH_RADIO, SMH_PATHS, SMH_UP};   // dropped in this order if over budget
+  static const uint8_t order[] = {SMH_AIR, SMH_NOLINK, SMH_RADIO, SMH_PATHS, SMH_UP};   // dropped in this order if over budget
+  const SmLinkSeen* link = sm_link_find(link_id);
   uint8_t dropped = 0;
-  for (int pass = 0; pass <= 4; pass++) {
+  for (int pass = 0; pass <= 5; pass++) {
     auto show = [&](uint8_t bit) { return ((sm.home & bit) || admin) && !(dropped & bit); };
     auto star = [&](uint8_t bit) { if (admin && !(sm.home & bit)) P("*"); };
     pb_reset(); P("#!c=0\n");
@@ -882,11 +932,12 @@ static void pg_home(const RNS::Bytes& rid) {
     P("<\n");
     if (admin) { PL("Admin", 'a'); P("\n"); }
     else if (rid.size() && sm.pw_on && !preview) { PL("Register", 'l'); P("\n"); }
-    if (!preview) P_verified(rid);
+    if (!preview) P_verified(rid, admin);
+    if (link && !admin && !(sm.home & SMH_NOLINK) && !(dropped & SMH_NOLINK)) P_link(link);   // admins get it on the Admin page
     P("-\n`c");                                      // `c toggles and carries over lines (Micron): once for the whole block
     if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
     P("%s ScotMesh microReticulum\n%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);   // last on the page: no `a (it would un-centre this line)
-    if (sm_pn <= SM_HOME_BUDGET || pass == 4) break;
+    if (sm_pn <= SM_HOME_BUDGET || pass == 5) break;
     dropped |= order[pass];
   }
   if (dropped) NOTICE("[pages] home over budget, optional rows dropped");
@@ -984,8 +1035,53 @@ static void pg_register(const RNS::Bytes& rid) {
 
 // Admin hub and its three sections
 static void P_item(const char* label, char pg, const char* note = "") { PL(label, pg); if (*note) P(" " DIM("%s"), note); P("\n"); }
-static void pg_hub() {
+// Who delivered a 2+ hop link: the packet doesn't say (the last repeater strips
+// its transport id), so first ask the path table for our next hop towards the
+// visitor's own LXMF/NomadNet address (worked out from the identity hash, as
+// sm_admin_identity does), else guess from the signal of recently heard repeaters.
+static RNS::Bytes sm_dest_of(const char* app, const char* aspect, const RNS::Bytes& id) {
+  RNS::Bytes m = RNS::Destination::name_hash(app, aspect); m.append(id); return RNS::Identity::full_hash(m).left(16);
+}
+static RNS::Bytes sm_last_hop(const RNS::Bytes& rid, int16_t rssi, bool sig, bool& guessed) {
+  guessed = false;
+  if (rid.size() == 16) for (auto& a : {std::make_pair("lxmf", "delivery"), std::make_pair("nomadnetwork", "node")}) {
+    RNS::Bytes d = sm_dest_of(a.first, a.second, rid);
+    if (RNS::Transport::has_path(d) && RNS::Transport::hops_to(d) > 1) { RNS::Bytes nh = RNS::Transport::next_hop(d); if (nh.size() == 16) return nh; }
+  }
+  if (!sig) return {};
+  const SmRelay *best = nullptr, *second = nullptr; int bd = 999, sd = 999, live = 0; uint32_t now = millis();
+  for (auto& s : sm_relays) {
+    if (!s.at || now - s.at > 24UL * 3600000UL) continue;
+    live++; int d = abs(s.rssi - rssi);
+    if (d < bd) { second = best; sd = bd; best = &s; bd = d; } else if (d < sd) { second = &s; sd = d; }
+  }
+  if (!best || (live > 1 && (bd > 6 || sd - bd < 3))) return {};   // only repeater heard, or a clear match
+  guessed = true; return RNS::Bytes(best->id, 16);
+}
+// A repeater's name: ScotMesh nodes announce NomadNet from their transport identity,
+// so its NomadNet address follows from the transport id; Python nodes stay a hash.
+static void P_relay_name(const RNS::Bytes& t) {
+  RNS::Bytes d = sm_dest_of("nomadnetwork", "node", t); const char* name = sm_nbr_name(d); char buf[17] = "";
+  if (!name || !name[0]) {
+    RNS::Bytes ad = RNS::Identity::recall_app_data(d); size_t l = ad.size() < 16 ? ad.size() : 16; bool ok = l > 0;
+    for (size_t k = 0; k < l; k++) { uint8_t c = ad.data()[k]; if (c < 0x20 || c == '`') ok = false; }
+    if (ok) { memcpy(buf, ad.data(), l); buf[l] = 0; name = buf; }
+  }
+  std::string h = t.toHex(); h.resize(8);
+  if (name && name[0]) P("%s " DIM("%s"), name, h.c_str()); else P("%s", h.c_str());
+}
+static void pg_hub(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
   Ph(nomadnet_name); P("%d%% " MIDDOT " up %s\n", sm_pct(), sm_up());
+  if (const SmLinkSeen* l = sm_link_find(link_id)) {   // the admin home view usually runs over budget and drops it
+    P_link(l, true);
+    if (l->hops > 1) {
+      bool guessed; RNS::Bytes t = sm_last_hop(rid, l->rssi, l->sig, guessed);
+      P(DIM("Last hop") " ");
+      if (!t) P(DIM("unknown") "\n");
+      else { P_relay_name(t); P(guessed ? "? " DIM("by signal") "\n" : " " DIM("from path table") "\n"); }
+    }
+  }
+  P_verified(rid);
   if (sm_trial) { P("`Fda3! Radio trial`f "); PL("confirm", 'f'); P("\n"); }
   if (!sm_pending.empty()) { char l[16]; snprintf(l, sizeof l, "%u waiting", (unsigned)sm_pending.size()); P("`Fda3!`f "); PL(l, 'q'); P("\n"); }
   P("\n>>Admin\n"); PL("Settings", 's'); P("  "); PL("Access", 'c'); P("  "); PL("Device", 'd');
@@ -1055,11 +1151,11 @@ static void pg_name(const RNS::Bytes& rid) {
 }
 
 static void pg_homelayout(const RNS::Bytes& rid) {
-  static const struct { uint8_t bit; const char* k; const char* l; } K[] = {{SMH_BAT, "b", "Battery"}, {SMH_UP, "u", "Uptime"}, {SMH_RADIO, "r", "Radio"}, {SMH_PATHS, "d", "Paths"}, {SMH_AIR, "x", "Airtime"}, {SMH_OP, "o", "Operator"}, {SMH_ROUTES, "p", "Routes pages"}};
+  static const struct { uint8_t bit; const char* k; const char* l; } K[] = {{SMH_BAT, "b", "Battery"}, {SMH_UP, "u", "Uptime"}, {SMH_RADIO, "r", "Radio"}, {SMH_PATHS, "d", "Paths"}, {SMH_AIR, "x", "Airtime"}, {SMH_OP, "o", "Operator"}, {SMH_ROUTES, "p", "Routes pages"}, {SMH_NOLINK, "lk", "Visitor's link (hops, signal)"}};
   const char* msg = nullptr;
-  if (Vis("a", "s")) { uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1")) h |= k.bit; sm.home = h; sm.api = Fis("api", "1"); sm_save(); sm_change(rid, "home page layout"); msg = "Saved."; }
+  if (Vis("a", "s")) { uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1") != (k.bit == SMH_NOLINK)) h |= k.bit; sm.home = h; sm.api = Fis("api", "1"); sm_save(); sm_change(rid, "home page layout"); msg = "Saved."; }
   Ph("Home page"); Pmsg('o', msg); P(DIM("Ticked = public") "\n");
-  for (auto& k : K) { PC(k.k, sm.home & k.bit); P(" %s\n", k.l); }
+  for (auto& k : K) { PC(k.k, !(sm.home & k.bit) == (k.bit == SMH_NOLINK)); P(" %s\n", k.l); }
   PC("api", sm.api); P(" Telemetry API\n"); PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK();
 }
 
@@ -1715,12 +1811,12 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
   else if (sm_parse(data), api) api_reply(path);
   else {
     char pg = !strcmp(path, "/page/index.mu") ? 'I' : (strlen(path) == 10 && !strcmp(path + 7, ".mu")) ? path[6] : '?';
-    if (pg == 'I') pg_home(rid);
+    if (pg == 'I') pg_home(rid, link_id);
     else if (pg == 'r' || pg == 'b') pg_list(pg == 'r', rid);
     else if (pg == 'l') pg_register(rid);
     else if (!sm_is_admin(rid)) pg_denied(rid);
     else switch (pg) {
-      case 'a': pg_hub(); break;
+      case 'a': pg_hub(rid, link_id); break;
       case 's': pg_settings(); break;
       case 'c': pg_access(); break;
       case 'd': pg_device(); break;

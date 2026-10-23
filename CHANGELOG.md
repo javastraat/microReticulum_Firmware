@@ -10,6 +10,7 @@
 - Optional flag and footer line on the NomadNet home page, set per node on the Name & announce page.
 - Cached neighbour names shown next to hashes on the NomadNet Routes/Neighbours pages, with short hash for named rows and short-by-default.
 - Opt-in power-saving build flags for ESP32 boards (160 MHz underclock + loop-yield idle gating), enabled for Heltec V4.
+- "Your link" line on the NomadNet home page: how many hops the visitor's request took, plus RSSI/SNR of the last hop when it arrived over LoRa. Read from the raw packet header in the receive hook, no library change. On by default, can be hidden on the Home page layout page; admins see it on the Admin page instead, and the admin home view shortens the verified identity to 8 characters (full hash on the Admin page) so Radio and Airtime fit again. For 2+ hop links the Admin page also names the last hop: from the path table towards the admin's own LXMF/NomadNet address, else guessed from the signal of recently heard repeaters (marked with "?").
 
 ### Fixed
 
