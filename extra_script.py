@@ -257,9 +257,13 @@ def firmware_package(env):
     elif (platform == "nordicnrf52"):
         env.Execute("cp " + build_dir + "/" + env.subst("$PROGNAME") + ".zip " + project_dir + "/Release/.")
         # Also emit a UF2 for boards with a UF2-capable bootloader (Seeed XIAO family:
-        # double-tap reset, drag the file onto the XIAO-BOOT drive). Family 0xADA52840 = nRF52840.
+        # double-tap reset, drag the file onto the XIAO-BOOT / SENSECAP drive). Family
+        # 0xADA52840 = generic nRF52840; a board can set its own via custom_uf2_family
+        # (the SenseCAP P1 bootloader only takes 0x28860044).
         if variant and variant.startswith("seeed_"):
-            env.Execute("\"$PYTHONEXE\" " + project_dir + "/tools/uf2conv.py -f 0xADA52840 -c "
+            family = env.GetProjectOption("custom_uf2_family", "0xADA52840")
+            print("uf2 family:", family)
+            env.Execute("\"$PYTHONEXE\" " + project_dir + "/tools/uf2conv.py -f " + family + " -c "
                         + build_dir + "/" + env.subst("$PROGNAME") + ".hex -o "
                         + project_dir + "/Release/" + env.subst("$PROGNAME") + ".uf2")
     else:
@@ -273,6 +277,29 @@ def firmware_package(env):
         env.Execute(zip_cmd)
         get_target()
     env.Execute("python3 " + project_dir + "/release_hashes.py > " + project_dir + "/Release/release.json")
+
+def image_size_check(target, source, env):
+    # Fail the build when the flashed image (all data in the .hex) is larger than the
+    # bootloader accepts: the linker doesn't catch it (.data is placed after FLASH
+    # unchecked) and PlatformIO's "Flash: x%" is against the board maximum, not this.
+    limit = int(env.GetProjectOption("custom_max_image_size"))
+    hex_path = target[0].get_abspath()
+    lo, hi, base = None, 0, 0
+    with open(hex_path) as f:
+        for line in f:
+            if not line.startswith(":"): continue
+            n, addr, kind = int(line[1:3], 16), int(line[3:7], 16), int(line[7:9], 16)
+            if kind == 2: base = int(line[9:13], 16) << 4          # extended segment address (objcopy uses these)
+            elif kind == 4: base = int(line[9:13], 16) << 16       # extended linear address
+            elif kind == 0 and base + addr < 0x10000000:      # skip UICR/FICR records
+                a = base + addr; lo = a if lo is None else min(lo, a); hi = max(hi, a + n)
+    size = hi - (lo or 0)
+    print("Image size: %d B of %d B allowed (%d B left)" % (size, limit, limit - size))
+    if size > limit:
+        print("*** ERROR: image is %d B over the %d B this board's bootloader accepts;"
+              " it would silently refuse the update. Shrink the build." % (size - limit, limit))
+        import os; os.remove(hex_path)                       # so the next build retries instead of reusing it
+        return 1
 
 #
 # Main script
@@ -331,5 +358,7 @@ else:
     )
 
 # Register actions
+if platform == "nordicnrf52" and env.GetProjectOption("custom_max_image_size", None):
+    env.AddPostAction("$BUILD_DIR/${PROGNAME}.hex", image_size_check)
 env.AddPreAction("upload", pre_upload)
 env.AddPostAction("upload", post_upload)

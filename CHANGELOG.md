@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- Solar Node P1 image is back under the 798,720 B its bootloader accepts: the "Your link" pages took it 2.4 KB over, so the bootloader silently refused both the UF2 and the DFU zip. The P1 build now compiles out TRACE logging (`RNS_LOG_LEVEL_DEBUG`), leaving ~28 KB headroom. The build now fails when the image exceeds that limit (`custom_max_image_size`), and the P1 UF2 is packaged with the Seeed family ID `0x28860044` its bootloader requires (the generic `0xADA52840` was silently ignored).
 - Closed stale/abandoned Reticulum Links after 15 minutes idle — the library's `Link::start_watchdog()` is an unimplemented stub upstream, so a NomadNet client that never sent `LINKCLOSE` leaked memory forever.
 - ESP32 post-upload firmware-hash write no longer races the provisioning step's USB-CDC reset (5s settle delay added).
 - RAK4631 and T-Echo builds link again (hard-fault dump now Solar Node P1 only).
