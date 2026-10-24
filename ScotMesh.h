@@ -1428,7 +1428,11 @@ static void pg_telemetry() {
   } else {
     if (EnvSensors::humidity_found) P(DIM("Temp") " %.1fC  " DIM("Humidity") " %.1f%%\n", EnvSensors::temperature, EnvSensors::humidity);
     else P(DIM("Temp") " %.1fC\n", EnvSensors::temperature);
-    if (EnvSensors::pressure_found) P(DIM("Pressure") " %.1fhPa  " DIM("Altitude") " %.0fm\n", EnvSensors::pressure_hpa, EnvSensors::altitude_m);
+    if (EnvSensors::pressure_found) {   // altitude from 1013.25 hPa moves with the weather; sea-level pressure (from the Map page height) is what forecasts quote
+      P(DIM("Pressure") " %.1fhPa", EnvSensors::pressure_hpa);
+      if (sm.height != 0) P(" " DIM("sea level") " %.1fhPa\n", EnvSensors::pressure_hpa / powf(1.0f - sm.height / 44330.0f, 5.255f));
+      else P("\n" DIM("Sea level: set the height on the Map page") "\n");
+    }
     P(DIM("Sensor") " %s\n", EnvSensors::name());
   }
   if (EnvSensors::power_n && EnvSensors::read_power()) {

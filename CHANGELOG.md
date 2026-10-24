@@ -14,6 +14,7 @@
 
 ### Fixed
 
+- nRF52 boards: NaN checks work again. The Adafruit core appends `-Ofast` after our `-Os`, and its fast-math folded every `isnan()` to false, so missing readings showed as "nan" (e.g. `nanhPa` / `nan%` on the Telemetry page per-chip rows with an ENV III). Built with `-fno-finite-math-only` now.
 - Solar Node P1: the radio is reset before it is probed at boot. The P1 bootloader (0.9.2-OTAFIX2.2-BP1.3) can leave the SX1262 in reset, giving "No radio module found", `hw_ready 0` and a TNC config that never loads (the node fell back to host-controlled after a restart). A failed probe now logs the sync-word bytes read on nRF52 too.
 - microReticulum is pinned by its full commit hash: PlatformIO cannot fetch the short `fd76f15` on a clean build, it only worked from an existing `.pio` cache.
 - Solar Node P1 image is back under the 798,720 B its bootloader accepts: the "Your link" pages took it 2.4 KB over, so the bootloader silently refused both the UF2 and the DFU zip. The P1 build now compiles out TRACE logging (`RNS_LOG_LEVEL_DEBUG`), leaving ~28 KB headroom. The build now fails when the image exceeds that limit (`custom_max_image_size`), and the P1 UF2 is packaged with the Seeed family ID `0x28860044` its bootloader requires (the generic `0xADA52840` was silently ignored).
@@ -25,6 +26,7 @@
 
 ### Changed
 
+- Telemetry page shows sea-level pressure (from the height set on the Map page) instead of an altitude worked out from the standard 1013.25 hPa, which drifted with the weather (an Amsterdam roof read 160 m). `/api/env` keeps its `altitude` field.
 - Heltec V4 button: hold-to-sleep removed (unsafe on a roof-mounted repeater); single click toggles the display, double click announces, hold sends a 5x announce burst.
 - WiFi update window moved to `10.73.73.1`, clear of common home-network ranges, with upload progress and a clear message if the connection drops.
 - History page shows the first hour live from 1 minute after boot instead of staying empty for an hour.
