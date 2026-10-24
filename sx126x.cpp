@@ -176,6 +176,9 @@ bool sx126x::preInit() {
         std::fprintf(stderr,
             "[sx126x] preInit FAILED: chip did not respond (got msb=0x%02X lsb=0x%02X, expected 0x14/0x24)\n",
             syncmsb, synclsb);
+      #elif MCU_VARIANT == MCU_NRF52
+        // Same diagnosis on the P1: 0xFF/0xFF no chip or no power, 0x00/0x00 in reset or wrong pins.
+        printf("[sx126x] preInit failed: msb=0x%02X lsb=0x%02X (expected 0x14/0x24)\n", syncmsb, synclsb);
       #endif
       return false;
   }

@@ -773,6 +773,15 @@ void setup() {
       delay(100);
     #endif
 
+    #if BOARD_MODEL == BOARD_SEEED_P1
+      // The P1 bootloader (0.9.2-OTAFIX2.2-BP1.3) can leave the SX1262 in reset
+      // or undefined after boot: without this pulse preInit() reads no sync word,
+      // "No radio module found", hw_ready 0, and the TNC config is never loaded.
+      delay(10);
+      LoRa->reset();
+      delay(10);
+    #endif
+
     // Check installed transceiver chip and
     // probe boot parameters.
     #if MCU_VARIANT == MCU_NATIVE
