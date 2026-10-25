@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ScotMesh NomadNet Page Reference</title>
+<link rel="stylesheet" href="../Console/assets/css/water.css">
+<style>
+  /* Minimal additions on top of water.css -- no new palette, just layout glue. */
+  nav.jump { display: flex; flex-wrap: wrap; gap: 0 1em; margin-bottom: 1.5em; }
+  nav.jump span.menu a { white-space: nowrap; }
+  .lede { color: var(--text-muted); max-width: 70ch; }
+  section { margin-bottom: 2.5em; }
+  details > summary code { margin-left: 4px; }
+  details ul { margin-top: 0.4em; }
+  table.api td code { white-space: nowrap; }
+
+  /* Mockup of what a page actually looks like rendered in a NomadNet
+     client -- approximate, not pixel-exact (every client renders Micron
+     slightly differently), built by hand from the page's own source, not
+     a real screenshot. Example data (node name, hashes, percentages) is
+     all fictional. */
+  .screen {
+    background: var(--background-alt);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.8em 1em;
+    margin: 0.6em 0 1em;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 0.92em;
+    line-height: 1.55;
+    color: var(--text-main);
+    white-space: pre-wrap;
+  }
+  .screen .hd { color: var(--text-bright); font-weight: bold; }
+  .screen .sub { color: var(--text-bright); font-weight: bold; opacity: 0.85; }
+  .screen .dim { color: var(--text-muted); }
+  .screen .ok { color: #2ecc55; }    /* Micron `F2c5 -- success messages */
+  .screen .err { color: #ff6666; }   /* Micron `Ff66 -- error messages */
+  .screen .warn { color: #ddaa33; }  /* Micron `Fda3 -- warnings/in-progress */
+  .screen .lnk { color: var(--links); }
+  .screen .div { border-top: 1px solid var(--border); margin: 0.35em 0; }
+  .screen-caption { font-size: 0.85em; color: var(--text-muted); margin: -0.6em 0 1em; }
+</style>
+</head>
+<body>
+
+<h1>ScotMesh NomadNet Page Reference</h1>
+<p class="lede">Every page and API path a ScotMesh microReticulum node answers on its <code>nomadnet</code> destination, straight from <code>ScotMesh.h</code> &mdash; what each one shows, who can see it, and what it lets you do. Click a page to expand it. This copy also includes a mockup of what each page roughly looks like rendered in a NomadNet client &mdash; hand-built from the page's own source, not a real screenshot, and all example data (node name, hashes, numbers) is fictional.</p>
+
+<nav class="jump">
+  <span class="menu"><a href="#public">Public</a></span>
+  <span class="menu"><a href="#admin">Admin</a></span>
+  <span class="menu"><a href="#settings">Settings</a></span>
+  <span class="menu"><a href="#access">Access</a></span>
+  <span class="menu"><a href="#device">Device</a></span>
+  <span class="menu"><a href="#telemetry">Telemetry</a></span>
+  <span class="menu"><a href="#lxmf">LXMF alerts</a></span>
+  <span class="menu"><a href="#api">JSON API</a></span>
+</nav>
+
+<section id="public">
+<h2>Public</h2>
+<p class="lede">Reachable by anyone who can hear the node &mdash; no identity or password needed, unless noted.</p>
+
+<details>
+<summary><kbd>I</kbd> <code>/page/index.mu</code> &mdash; Home</summary>
+<div class="screen"><span class="hd">Hilltop</span>
+
+<span class="sub">Status</span>
+▇▇▇▇▇▇▇▇▇░ 94% 4.09V ▲
+<span class="dim">Up</span> 5h 52m, <span class="lnk">14 routes</span>
+<span class="dim">Radio</span> 869.463 SF8 125k, 2.4% air
+<div class="div"></div>
+<span class="lnk">Admin</span>
+Verified identity: 39781539a2bd1c84
+Your link direct, SNR 14.2 dB
+<div class="div"></div>
+ScotMesh microReticulum
+v1.86-scotmesh-dev &middot; SenseCAP P1</div>
+<p>The node's landing page &mdash; whatever the operator has chosen to make public.</p>
+<ul>
+  <li>Node name, battery gauge (10-block bar, %, voltage, charge arrow)</li>
+  <li>Uptime, path count (links to Routes), radio freq/SF, live airtime %, operator note</li>
+  <li>"Admin" link if you're already registered, or "Register" if password sign-up is on</li>
+  <li>Verified-identity line, firmware + board footer</li>
+</ul>
+<p><mark>Visitor view is configurable</mark> on the Settings &rarr; Home page.</p>
+</details>
+
+<details>
+<summary><kbd>r</kbd> <code>/page/r.mu</code> &mdash; Routes</summary>
+<div class="screen"><span class="hd">Routes</span> <span class="dim">14 &middot; hops &middot; heard &middot; name?</span>
+3f8a2c91 1 2m
+7bd04e5a 2 4m Hilltop-Relay
+a19cc038 1 9m
+c3e812f0 3 21m
+<span class="lnk">Neighbours</span>  <span class="lnk">Home</span></div>
+<p>The node's path table: destination hash &middot; hop count &middot; last heard, 10 rows per page, short or full hash display.</p>
+</details>
+
+<details>
+<summary><kbd>b</kbd> <code>/page/b.mu</code> &mdash; Neighbours</summary>
+<div class="screen"><span class="hd">Neighbours</span> <span class="dim">heard &middot; name</span>
+3f8a2c91 2m
+7bd04e5a 4m Hilltop-Relay
+e02bb711 15m
+<span class="lnk">Routes</span>  <span class="lnk">Home</span></div>
+<p>Peers this node has heard announce: destination hash &middot; time since heard &middot; name, paginated.</p>
+</details>
+
+<details>
+<summary><kbd>l</kbd> <code>/page/l.mu</code> &mdash; Register</summary>
+<div class="screen"><span class="hd">Register as an admin</span>
+Identify first, then reload.
+<span class="dim">The password registers the identity</span>
+<span class="dim">you are browsing with.</span>
+<span class="lnk">Home</span></div>
+<p>Request admin access with a password, if the operator has turned registration on. Goes straight to admin, or into an approval queue, depending on operator setting.</p>
+<p><mark>3 wrong tries locks you out for 15 min; 10 wrong tries mesh-wide pauses registration for an hour.</mark></p>
+</details>
+
+</section>
+
+<section id="admin">
+<h2>Admin</h2>
+<p class="lede">Reachable only once your identity is on the admin list &mdash; everyone else lands on an "Admins only" page instead. This is where the Home page's own "Admin" link goes.</p>
+
+<details>
+<summary><kbd>a</kbd> <code>/page/a.mu</code> &mdash; Admin hub</summary>
+<div class="screen"><span class="hd">Hilltop</span>
+94% &middot; up 5h 52m
+Your link direct, SNR 14.2 dB
+Verified identity: 39781539a2bd1c84
+<div class="div"></div>
+<span class="sub">Admin</span>
+<span class="lnk">Settings</span>  <span class="lnk">Access</span>  <span class="lnk">Device</span>  <span class="lnk">Telemetry</span>  <span class="lnk">History</span>
+<div class="div"></div>
+<span class="lnk">Home</span></div>
+<ul>
+  <li>Node name, battery %, uptime</li>
+  <li>Your current link: hop count and signal, and the last-hop relay's name if more than one hop away (by path table, or guessed from signal)</li>
+  <li>Verified-identity line</li>
+  <li>Live banners when relevant: an in-progress radio trial awaiting confirmation, or a count of registrations waiting for approval</li>
+  <li>Menu into Settings / Access / Device / Telemetry / History (the last two only on boards built with them)</li>
+</ul>
+</details>
+
+</section>
+
+<section id="settings">
+<h2>Settings</h2>
+<p class="lede">Reachable only once your identity is on the admin list &mdash; everyone else lands on an "Admins only" page instead.</p>
+
+<details>
+<summary><kbd>s</kbd> <code>/page/s.mu</code> &mdash; Settings hub</summary>
+<div class="screen"><span class="hd">Settings</span>
+<span class="lnk">Name &amp; announce</span>
+<span class="lnk">Home page</span>
+<span class="lnk">Map (rmap.world)</span> <span class="dim">off</span>
+<span class="lnk">Radio</span> <span class="dim">869.463 SF8</span>
+<span class="lnk">Role</span> <span class="dim">Fixed relay</span>
+<span class="lnk">Power</span> <span class="dim">below 25%</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Menu into the six pages below, each with its current value shown inline.</p>
+</details>
+
+<details>
+<summary><kbd>n</kbd> <code>/page/n.mu</code> &mdash; Name &amp; announce</summary>
+<div class="screen"><span class="hd">Name &amp; announce</span>
+Name     [Hilltop                        ]
+Operator [                              ]
+Announce every  (&bull;)30m ( )1h ( )3h ( )6h ( )12h
+Flag     [NL] <span class="dim">country code, e.g. NL</span>
+Footer   [Reticulum Amsterdam    ]
+
+<span class="lnk">Save</span>   &lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Node name (32 chars), operator note (22 chars)</li>
+  <li>Announce interval: 30m / 1h / 3h / 6h / 12h</li>
+  <li>Renaming re-announces the node immediately</li>
+  <li>Flag (2-letter country code, e.g. <code>NL</code>, shown as &#127475;&#127473;) and Footer text (24 chars): an optional line of your own on the home page, just above the &#127988;&#917607;&#917602;&#917619;&#917603;&#917620;&#917631; ScotMesh microReticulum credit &mdash; e.g. <code>&#127475;&#127473; Reticulum Amsterdam</code>. Leave both empty for no extra line. Stored in its own file, so older settings are untouched</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>h</kbd> <code>/page/h.mu</code> &mdash; Home page</summary>
+<div class="screen"><span class="hd">Home page</span>
+<span class="dim">Ticked = public</span>
+[x] Battery
+[x] Uptime
+[x] Radio
+[x] Paths
+[x] Airtime
+[ ] Operator
+[x] Routes pages
+[x] Visitor's link (hops, signal)
+[x] Telemetry API
+<span class="lnk">Save</span>  <span class="lnk">Preview</span>  &lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Checkboxes for what a visitor sees: battery, uptime, radio, paths, airtime, operator, routes-link</li>
+  <li>Telemetry API on/off switch</li>
+  <li>"Preview" link &mdash; see the visitor view live</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>g</kbd> <code>/page/g.mu</code> &mdash; Map (rmap.world)</summary>
+<div class="screen"><span class="hd">Map (rmap.world)</span>
+Paste from Google Maps:
+[56.19858, -3.16662                    ]
+Height [310  ]m  (&bull;)Exact ( )~1 km
+[ ] Publish on rmap.world
+<span class="dim">Not sent yet</span>
+<span class="lnk">Save</span>  &lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Paste a coordinate (lat, lon) + height in metres</li>
+  <li>Exact or ~1&nbsp;km-rounded precision, publish on/off</li>
+  <li>Last-sent time once published, "Announce now" action</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>f</kbd> <code>/page/f.mu</code> &mdash; Radio</summary>
+<div class="screen"><span class="hd">Radio</span>
+MHz [869.463 ] kHz [125 ]
+SF [8 ] CR [5 ] dBm [20]
+<span class="lnk">Try these</span>
+<span class="dim">Preset:</span> <span class="lnk">ScotMesh 868</span> <span class="lnk">433</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Current frequency, bandwidth, SF, CR, TX power</li>
+  <li>Two one-tap presets: ScotMesh 868 / 433</li>
+</ul>
+<p><mark>5-minute reversible trial &mdash; auto-reverts unless you hit Keep.</mark></p>
+</details>
+
+<details>
+<summary><kbd>w</kbd> <code>/page/w.mu</code> &mdash; Role</summary>
+<div class="screen"><span class="hd">Role</span>
+(&bull;) Fixed relay <span class="dim">FULL</span>
+( ) Access point <span class="dim">ACCESS_POINT</span>
+( ) Mobile <span class="dim">ROAMING</span>
+( ) End device <span class="dim">transport off</span>
+<span class="dim">Relays forward for others; end devices never do.</span>
+<span class="lnk">Save</span>  &lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Fixed relay &middot; Access point &middot; Mobile &middot; End device</li>
+  <li>Relays forward traffic for others; end devices never do</li>
+</ul>
+<p><mark>Needs a restart to apply.</mark></p>
+</details>
+
+<details>
+<summary><kbd>y</kbd> <code>/page/y.mu</code> &mdash; Power</summary>
+<div class="screen"><span class="hd">Power</span>
+Below [25]% battery:
+( ) Lower TX power to 10 dBm
+( ) Radio off until charged
+(&bull;) Nothing
+[x] Radio off below 3.3 V
+
+<span class="lnk">Save</span>  &lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Battery-% threshold (5&ndash;60%), action below it: lower TX to 10&nbsp;dBm, radio off until charged, or nothing</li>
+  <li>Separate hard cutoff: radio off below 3.3&nbsp;V</li>
+  <li>Live flag if a limit is currently in effect</li>
+</ul>
+</details>
+
+</section>
+
+<section id="access">
+<h2>Access</h2>
+
+<details>
+<summary><kbd>c</kbd> <code>/page/c.mu</code> &mdash; Access hub</summary>
+<div class="screen"><span class="hd">Access</span>
+<span class="lnk">Admins</span> <span class="dim">3/8</span>
+<span class="lnk">Password</span> <span class="dim">on</span>
+<span class="lnk">Change log</span> <span class="dim">12</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Menu into Admins / Password / Change log, each with a live count.</p>
+</details>
+
+<details>
+<summary><kbd>k</kbd> <code>/page/k.mu</code> &mdash; Admins</summary>
+<div class="screen"><span class="hd">Admins</span> <span class="dim">3/8</span>
+<span class="lnk">39781539a2bd1c84&hellip;</span> <span class="ok">you</span>
+<span class="lnk">7bd04e5a91ffac22&hellip;</span> <span class="dim">key</span>
+<span class="lnk">c3e812f009a7bb44&hellip;</span>
+<span class="dim">Add</span> [                                ] <span class="lnk">Add</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Up to 8 admin identity hashes, your own row marked "you"</li>
+  <li>Add by pasting a 32-hex identity hash</li>
+  <li>On nodes with LXMF alerts: <code>key</code> after an admin means the node has their public key and can send them alerts</li>
+</ul>
+<p><mark>Removing an admin is confirm-gated; you can't remove the last admin.</mark></p>
+</details>
+
+<details>
+<summary><kbd>p</kbd> <code>/page/p.mu</code> &mdash; Password registration</summary>
+<div class="screen"><span class="hd">Password registration</span>
+[x] On   [ ] Needs approval
+New   [            ]
+Again [            ] blank=keep
+<span class="lnk">Save</span>  &lt; <span class="lnk">Admin</span>
+
+<span class="sub">Last attempt</span>
+wrong 1/3</div>
+<ul>
+  <li>On/off, and "needs approval" (routes new sign-ups into a queue instead of auto-admitting)</li>
+  <li>Set/change password (8+ chars) &mdash; salted + hashed, never stored in plain text</li>
+  <li>Outcome of the last registration attempt</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>j</kbd> <code>/page/j.mu</code> &mdash; Change log</summary>
+<div class="screen"><span class="hd">Change log</span> <span class="dim">12/32</span>
+4m ago renamed node
+<span class="dim">39781539a2bd1c84&hellip;</span>
+2h ago Bluetooth on
+<span class="dim">39781539a2bd1c84&hellip;</span>
+5h ago radio trial
+<span class="dim">7bd04e5a91ffac22&hellip;</span>
+<span class="lnk">older</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Last 32 admin actions: how long ago, what happened, which identity.</p>
+</details>
+
+<details>
+<summary><kbd>q</kbd> <code>/page/q.mu</code> &mdash; Waiting for approval</summary>
+<div class="screen"><span class="hd">Waiting for approval</span>
+c3e812f009a7bb44c81f0e3d22ab9910
+<span class="dim">3 min ago</span> <span class="lnk">approve</span> <span class="lnk">deny</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Only reachable when "needs approval" is on. Shows pending registration requests and how long they've waited; approve or deny each.</p>
+</details>
+
+</section>
+
+<section id="device">
+<h2>Device</h2>
+
+<details>
+<summary><kbd>d</kbd> <code>/page/d.mu</code> &mdash; Device hub</summary>
+<div class="screen"><span class="hd">Device</span>
+<span class="lnk">Health</span>
+<span class="lnk">Lights &amp; Bluetooth</span> <span class="dim">lights on</span>
+<span class="lnk">Logs</span>
+<span class="lnk">Maintenance</span>
+<span class="lnk">Restart &amp; update</span>
+<span class="lnk">About</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Menu into the five pages below.</p>
+</details>
+
+<details>
+<summary><kbd>e</kbd> <code>/page/e.mu</code> &mdash; Health</summary>
+<div class="screen"><span class="hd">Health</span>
+<span class="dim">RAM</span> 128 KB free, flash 980 KB
+<span class="dim">Up</span> 5h 52m, 7 starts (power-on)
+<span class="dim">Radio</span> noise -108, last -22/14dB
+<span class="dim">Air</span> 2.4% now, 1.9% avg
+<span class="dim">Pkts</span> rx 2225, tx 1697
+<span class="dim">Tables</span> paths 14/500, ann 22
+known 31, links 10, nbrs 9
+
+&lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Free RAM / flash, uptime, boot count, last reset reason</li>
+  <li>Radio noise floor, last RSSI/SNR, current + average airtime %</li>
+  <li>Packets rx/tx, path/announce/known-destination/link/neighbour table sizes</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>i</kbd> <code>/page/i.mu</code> &mdash; Lights &amp; Bluetooth</summary>
+<div class="screen"><span class="hd">Lights &amp; Bluetooth</span>
+(&bull;) On ( ) Off ( ) 10 min after start
+<span class="lnk">Save</span>  <span class="lnk">Blink 30 s</span> <span class="dim">errors always show</span>
+
+<span class="sub">Bluetooth</span>
+(&bull;) On ( ) Off  <span class="lnk">Save</span>  <span class="lnk">Unpair all</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>LED mode: on / off / first 10 min only &mdash; errors always show regardless</li>
+  <li>"Blink for 30s" locator action</li>
+  <li>Bluetooth on/off, "unpair all paired phones" (where supported)</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>o</kbd> <code>/page/o.mu</code> &mdash; Logs</summary>
+<div class="screen"><span class="hd">Log</span>
+[boot] rnsd attach ok
+[radio] freq set 869.463MHz
+[nomad] node destination announced
+[bt] advertising started
+[provision] config committed
+
+<span class="lnk">Refresh</span>  &lt; <span class="lnk">Admin</span></div>
+<p>Last 5 log lines, with a refresh action.</p>
+</details>
+
+<details>
+<summary><kbd>x</kbd> <code>/page/x.mu</code> &mdash; Maintenance</summary>
+<div class="screen"><span class="hd">Maintenance</span>
+<span class="lnk">Announce now</span>
+
+<span class="sub">Auto restart</span>
+(&bull;) Off ( ) Every day ( ) Every week  <span class="lnk">Save</span>
+
+<span class="sub">Reset</span>
+<span class="lnk">Clear routes &amp; data</span>  <span class="lnk">Factory reset</span>  <span class="lnk">Full reset</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<p>"Announce now", auto-restart schedule: off / daily / weekly.</p>
+<p><mark>Confirm-gated resets: clear routes &amp; data, factory reset, full reset.</mark></p>
+</details>
+
+<details>
+<summary><kbd>m</kbd> <code>/page/m.mu</code> &mdash; Restart &amp; update</summary>
+<div class="screen"><span class="hd">Restart &amp; update</span>
+Up 5h 52m   <span class="lnk">Restart</span>
+
+<span class="sub">Firmware update</span>
+<span class="dim">nRF52840</span>
+<span class="lnk">Bluetooth update</span>
+<span class="lnk">USB bootloader</span>
+
+&lt; <span class="lnk">Admin</span></div>
+<ul>
+  <li>Restart (confirm-gated, ~15s offline)</li>
+  <li>nRF52: Bluetooth DFU or USB-bootloader window &mdash; ESP32 (with a spare app slot): 20-min WiFi update AP <code>ScotMesh-Update</code> with a one-time password; upload the <code>.bin</code> at <code>http://10.73.73.1</code>, with a progress bar</li>
+</ul>
+<p><mark>Needs battery &ge;30% or charging; one-time 2-minute confirm token.</mark></p>
+</details>
+
+<details>
+<summary><kbd>u</kbd> <code>/page/u.mu</code> &mdash; About</summary>
+<div class="screen"><span class="hd">About</span>
+v1.86-scotmesh-dev &middot; SenseCAP P1
+<span class="dim">Transport identity</span>
+39781539a2bd1c84f00e2a7711cc5593
+<span class="dim">Management</span>
+7bd04e5a91ffac22d6c0b4e8a3f71209
+<span class="dim">NomadNet</span>
+39781539a2bd1c84f00e2a7711cc5593
+<span class="dim">LXMF (alerts)</span>
+8f6b8085f68a2a7c147ea68c9c12e054
+<span class="dim">LXMF in 4, out 2, last:</span>
+2026-10-25 09:12
+<span class="dim">Probe</span>
+c3e812f009a7bb44c81f0e3d22ab9910
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Firmware tag, board name, transport/management/NomadNet/probe destination hashes, and on nodes with LXMF alerts the node's LXMF address (the one to add as a contact).</p>
+</details>
+
+</section>
+
+<section id="telemetry">
+<h2>Telemetry</h2>
+<p class="lede">Only on boards built with them. Telemetry needs <code>HAS_ENV_SENSORS</code> (Solar Node P1). History needs <code>SM_HISTORY</code> (Solar Node P1, Heltec V3, Heltec V4). On boards without an environment sensor, or without an MCU temperature reading (the Heltecs), those History lines are simply left out.</p>
+
+<details>
+<summary><kbd>t</kbd> <code>/page/t.mu</code> &mdash; Telemetry</summary>
+<div class="screen"><span class="hd">Telemetry</span>
+<span class="dim">Temp</span> 18.4C  <span class="dim">Humidity</span> 54.2%
+<span class="dim">Pressure</span> 998.1hPa <span class="dim">sea level</span> 1013.6hPa
+<span class="dim">Sensor</span> SHT30 + QMP6988
+<span class="dim">MCU</span> 28.3C
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Auto-detected Grove environment sensors: an M5Stack ENV unit &mdash; ENV&nbsp;I (DHT12+BMP280), ENV&nbsp;II (SHT30+BMP280) or ENV&nbsp;III (SHT30+QMP6988) &mdash; or a single module with an SHT4x, SHTC3, AHT10/20, BME280, BME680, BMP280, BMP180/BMP085 or LPS22HB. With several, humidity comes from the best humidity chip (SHT4x, SHT30, SHTC3, BME680, BME280, AHT, DHT12, in that order), pressure from the best pressure chip, and temperature from the humidity chip. The BME680&rsquo;s gas (air quality) reading is not used.</p>
+<ul>
+  <li>Temperature, and humidity if a humidity sensor was found</li>
+  <li>Pressure + calculated altitude if a pressure sensor was found</li>
+  <li>Which exact chips were detected (e.g. "SHT30 + QMP6988")</li>
+  <li>Power monitors on the same Grove port, if fitted: INA219, INA226, INA260 or INA3221 (up to two chips, four readings). One line each with volts, milliamps and watts, e.g. <code>INA226 13.12V 412mA 5.41W</code>; an INA3221 shows its inputs as <code>INA3221/1</code>&ndash;<code>/3</code>, and inputs with nothing connected are left out. Current is worked out for a 0.1&nbsp;&ohm; shunt, as on the usual breakout boards (build flag <code>ENV_INA_SHUNT_OHMS</code> for others). Negative current means it flows the other way, e.g. into the battery</li>
+  <li>MCU die temperature, read directly off the nRF52840</li>
+  <li>With more than one sensor chip, a line per chip with its own readings at the bottom, e.g. <code>SHT30 21.3C 54%</code> and <code>QMP6988 21.8C 1012.4hPa</code>. Handy with a second sensor in another place (inside the box, outside). These lines are left out if the page would not fit in one packet</li>
+  <li>Says plainly if nothing is attached, or the read failed</li>
+</ul>
+</details>
+
+<details>
+<summary><kbd>z</kbd> <code>/page/z.mu</code> &mdash; History</summary>
+<div class="screen"><span class="dim">bat</span> ▇|▇▇▇▇▇▇|▇▇▇▇▇▇▇|▇█████
+94% now &middot; 24h 82-94%
+<span class="dim">days</span> 82-94 79-91 75-88 80-93 85-95 77-90 83-94
+<span class="dim">temp</span> 18/24C 7d 18/24C &middot; mcu 22/36C
+<span class="dim">air</span> 56-61% &middot; 995&gt;1001hPa
+<span class="dim">mesh</span> 9 nbrs (max 9) &middot; 14 routes
+20h, newest 51m ago
+
+&lt; <span class="lnk">Admin</span></div>
+<p>Battery, sensor and mesh readings over the last 7&nbsp;days. Linked from the Admin hub.</p>
+<p>The node takes a reading every 10&nbsp;minutes and saves the average of each hour as one record. It keeps the last 7&nbsp;days (168 hours) in its flash memory, so they survive restarts.</p>
+<p>The first reading is taken 1&nbsp;minute after start. Until the first hour is saved, the page shows the hour so far: how many readings, and their averages.</p>
+<p>A record is only saved once the node has run a full hour. If the node keeps restarting every few minutes (for example on an almost empty battery), it saves nothing, so the week already stored is not pushed out by short runs.</p>
+<ul>
+  <li>A small bar chart of the battery over the last 24&nbsp;hours, one bar per hour, oldest on the left. An amber <code>|</code> marks a restart. The node can't tell how long it was off, so the bars continue right after it</li>
+  <li>Battery now, the lowest and highest of the last 24&nbsp;hours, and the biggest drop while not charging (e.g. <code>-14%/11h</code>: 14&nbsp;% lost over 11&nbsp;hours, typically overnight)</li>
+  <li>Battery min&ndash;max for each of the last 7 days, newest first</li>
+  <li>Sensor temperature 24&nbsp;h and 7&nbsp;d min/max, MCU temperature, humidity range and the pressure trend</li>
+  <li>Neighbours and routes now, and the most neighbours seen in the last 24&nbsp;hours</li>
+  <li>The page must fit in one LoRa packet. If it would be too long, the lines at the bottom are left out; the battery lines at the top always stay</li>
+</ul>
+</details>
+
+</section>
+
+<section id="lxmf">
+<h2>LXMF alerts</h2>
+<p class="lede">Only on boards built with <code>SM_LXMF</code> &mdash; Solar Node P1, Heltec V3 and Heltec V4. The node gets its own LXMF address, so it shows up in Sideband, NomadNet or MeshChat like any other contact, under the node name. It announces that address together with its NomadNet page, on the same interval. The address is also on the About page.</p>
+<ul>
+  <li><b>&ldquo;Running again&rdquo; alert:</b> 2&nbsp;minutes after every restart, all admins get a message saying the node is running again, why it restarted, how many restarts so far, and the battery level. On the Solar Node P1, a crash (hard fault or uncaught exception) is in it too; the Heltecs give the reset reason only. Example: <code>Hilltop is running again (watchdog, restart #12, hard fault pc=0002a1f4), battery 64%</code></li>
+  <li><b>&ldquo;Battery low&rdquo; alert:</b> sent once when the battery, while not charging, drops below the Power page threshold plus 10&nbsp;%. That way you hear about it before the Power page lowers the TX power or turns the radio off. Example with a 25&nbsp;% threshold: at 34&nbsp;% you get <code>Hilltop battery low: 34% 3.61V, not charging</code>. You only get it again after the battery has charged back up to 45&nbsp;% (or starts charging) and then drops again</li>
+  <li><b>Commands from admins:</b> send <code>status</code> for battery, uptime, neighbours, routes, temperature and any power monitor readings; anything else gets a short help reply. Messages from anyone else are ignored, and so are messages that can't be verified as really coming from that admin (their signature doesn't match)</li>
+  <li><b>Keys:</b> the node needs an admin's public key to write to them. It saves it when the admin opens any page while identified (the Admins page then shows <code>key</code> next to them); otherwise it uses the admin's own LXMF announce if it has heard one</li>
+  <li><b>Delivery:</b> each alert goes out as one encrypted packet straight to the admin's LXMF client. If the node doesn't know a route to the admin yet, it asks the mesh for one first</li>
+  <li><b>When the admin is offline:</b> the node keeps trying for 10&nbsp;minutes, then gives up on that alert. It doesn't use a propagation node (an LXMF mailbox that holds messages until you're back), so an alert sent while your client is off is missed</li>
+  <li><b>Stamps:</b> some clients have an anti-spam setting that requires unknown senders to add a &ldquo;stamp&rdquo; (a small proof of work). The node doesn't make stamps, so with that setting on, its alerts are silently dropped. Turn the setting off, or mark the node as a trusted contact if your client allows that</li>
+  <li><b>Message time:</b> the node has no clock, so it takes the time from page requests and incoming messages, and saves it hourly. After a restart, messages carry the last saved time until it hears a new one</li>
+</ul>
+</section>
+
+<section id="api">
+<h2>JSON API</h2>
+<p class="lede">Same destination as the pages above, plain JSON replies &mdash; for scripts and dashboards rather than browsing. Toggled by the Telemetry API switch on the Home page settings.</p>
+
+<table class="api">
+<thead><tr><th>Endpoint</th><th>Fields</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code>/api</code></td><td>v, api: [&hellip;]</td><td>Lists every endpoint below.</td></tr>
+<tr><td><code>/api/bat</code></td><td>percent, voltage, charging</td><td></td></tr>
+<tr><td><code>/api/up</code></td><td>uptime, reset</td><td></td></tr>
+<tr><td><code>/api/net</code></td><td>routes, neighbours, rx, tx, links</td><td></td></tr>
+<tr><td><code>/api/radio</code></td><td>freq, bw, sf, cr, txp, airtime, noise, rssi, snr</td><td></td></tr>
+<tr><td><code>/api/sys</code></td><td>fw, board, name, free_ram, free_flash</td><td></td></tr>
+<tr><td><code>/api/health</code></td><td>free_ram, free_flash, reboots, reset, paths, paths_max, announces, neighbours</td><td></td></tr>
+<tr><td><code>/api/pos</code></td><td>lat, lon, height</td><td>Errors if the map page hasn't published a position.</td></tr>
+<tr><td><code>/api/paths</code></td><td>total, o, cols: [dest,hops,age_s,via], rows: [&hellip;]</td><td>Paginate with <code>?o=</code>/<code>?n=</code>, short hashes with <code>?s=1</code>.</td></tr>
+<tr><td><code>/api/nbrs</code></td><td>total, o, cols: [dest,age_s,name], rows: [&hellip;]</td><td>Same pagination as <code>/api/paths</code>.</td></tr>
+<tr><td><code>/api/all</code></td><td>bat + up + net + airtime, combined</td><td></td></tr>
+<tr><td><code>/api/env</code></td><td>temp, humidity, pressure, altitude, sensor, power: [[label, volts, amps], &hellip;], mcu_temp, chips: [[name, temp, humidity, pressure], &hellip;]</td><td>Env-sensor boards only (Solar Node P1). <code>power</code> only when a power monitor is fitted; a failed read gives <code>null</code>s. <code>chips</code> only with more than one sensor chip; <code>null</code> where a chip does not measure that, and left out if the reply would not fit in one packet. Errors if neither an environment sensor nor a power monitor is attached.</td></tr>
+<tr><td><code>/api/hist</code></td><td>total, o, last_s, cols: [h,pct,mv,chg,t,hum,hpa,mcu,nbrs,paths,boot], rows: [&hellip;]</td><td><code>SM_HISTORY</code> boards only (Solar Node P1, Heltec V3, Heltec V4). Hourly records, newest first; <code>h</code> = hours back. <code>?o=</code> skips that many hours, <code>?n=</code> sets how many rows (default 6, max 24). If the rows don't fit in one packet, fewer are sent and the reply ends with <code>"more":true</code>. Sensors that aren't fitted are <code>null</code>; <code>boot</code>=1 marks the first record after a restart.</td></tr>
+</tbody>
+</table>
+
+</section>
+
+<footer>
+Generated from <code>ScotMesh.h</code> in microReticulum_Firmware. Admin pages require being on the Admins list (<code>/page/k.mu</code>) or registering with a password (<code>/page/l.mu</code>) &mdash; everyone else sees "Admins only." Every reply is built to fit one LoRa packet, so a few pages trim their own content rather than risk silently failing to deliver.
+</footer>
+
+</body>
+</html>

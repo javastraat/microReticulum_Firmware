@@ -23,6 +23,7 @@
 
 <nav class="jump">
   <span class="menu"><a href="#public">Public</a></span>
+  <span class="menu"><a href="#admin">Admin</a></span>
   <span class="menu"><a href="#settings">Settings</a></span>
   <span class="menu"><a href="#access">Access</a></span>
   <span class="menu"><a href="#device">Device</a></span>
@@ -61,6 +62,23 @@
 <summary><kbd>l</kbd> <code>/page/l.mu</code> &mdash; Register</summary>
 <p>Request admin access with a password, if the operator has turned registration on. Goes straight to admin, or into an approval queue, depending on operator setting.</p>
 <p><mark>3 wrong tries locks you out for 15 min; 10 wrong tries mesh-wide pauses registration for an hour.</mark></p>
+</details>
+
+</section>
+
+<section id="admin">
+<h2>Admin</h2>
+<p class="lede">Reachable only once your identity is on the admin list &mdash; everyone else lands on an "Admins only" page instead. This is where the Home page's own "Admin" link goes.</p>
+
+<details>
+<summary><kbd>a</kbd> <code>/page/a.mu</code> &mdash; Admin hub</summary>
+<ul>
+  <li>Node name, battery %, uptime</li>
+  <li>Your current link: hop count and signal, and the last-hop relay's name if more than one hop away (by path table, or guessed from signal)</li>
+  <li>Verified-identity line</li>
+  <li>Live banners when relevant: an in-progress radio trial awaiting confirmation, or a count of registrations waiting for approval</li>
+  <li>Menu into Settings / Access / Device / Telemetry / History (the last two only on boards built with them)</li>
+</ul>
 </details>
 
 </section>
@@ -227,7 +245,7 @@
 <h2>Telemetry</h2>
 <p class="lede">Only on boards built with them. Telemetry needs <code>HAS_ENV_SENSORS</code> (Solar Node P1). History needs <code>SM_HISTORY</code> (Solar Node P1, Heltec V3, Heltec V4). On boards without an environment sensor, or without an MCU temperature reading (the Heltecs), those History lines are simply left out.</p>
 
-<details open>
+<details>
 <summary><kbd>t</kbd> <code>/page/t.mu</code> &mdash; Telemetry</summary>
 <p>Auto-detected Grove environment sensors: an M5Stack ENV unit &mdash; ENV&nbsp;I (DHT12+BMP280), ENV&nbsp;II (SHT30+BMP280) or ENV&nbsp;III (SHT30+QMP6988) &mdash; or a single module with an SHT4x, SHTC3, AHT10/20, BME280, BME680, BMP280, BMP180/BMP085 or LPS22HB. With several, humidity comes from the best humidity chip (SHT4x, SHT30, SHTC3, BME680, BME280, AHT, DHT12, in that order), pressure from the best pressure chip, and temperature from the humidity chip. The BME680&rsquo;s gas (air quality) reading is not used.</p>
 <ul>
@@ -241,7 +259,7 @@
 </ul>
 </details>
 
-<details open>
+<details>
 <summary><kbd>z</kbd> <code>/page/z.mu</code> &mdash; History</summary>
 <p>Battery, sensor and mesh readings over the last 7&nbsp;days. Linked from the Admin hub.</p>
 <p>The node takes a reading every 10&nbsp;minutes and saves the average of each hour as one record. It keeps the last 7&nbsp;days (168 hours) in its flash memory, so they survive restarts.</p>
