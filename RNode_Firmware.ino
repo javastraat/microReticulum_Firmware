@@ -2971,7 +2971,15 @@ void loop() {
   #endif
 
 #ifdef SCOTMESH_PAGES
-  sm_loop();
+  try {
+    sm_loop();
+  }
+  catch (const std::bad_alloc&) {
+    ERROR("sm_loop failed: bad_alloc - out of memory");
+  }
+  catch (std::exception& e) {
+    ERRORF("sm_loop failed: %s", e.what());
+  }
 #endif
 
   // Feed WDT

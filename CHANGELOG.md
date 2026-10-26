@@ -22,6 +22,7 @@
 - ESP32 post-upload firmware-hash write no longer races the provisioning step's USB-CDC reset (5s settle delay added).
 - RAK4631 and T-Echo builds link again (hard-fault dump now Solar Node P1 only).
 - Dropped the libstdc++ demangler (~32 KB flash) by recording uncaught C++ exceptions in the fault record instead.
+- ScotMesh's own loop (`sm_loop()`) is now wrapped in the same try/catch as the RNS loop and LoRa interface: an exception thrown by LXMF send/announce/path-request/link-teardown work used to reach the uncaught-exception handler and force a reboot, with only a generic fault-record `lr` (which always resolves to the same spot inside the exception runtime, not the actual throw site) to go on. It's now logged with the real message and the device keeps running instead.
 - Home page footer centering now uses one `` `c `` for the block instead of per-line.
 
 ### Changed
