@@ -123,14 +123,16 @@
 #define SM_HARD_LIMIT    409      // 431 B link MDU minus response framing
 #define SM_RAM_FLOOR     8192     // below this, answer "busy" instead of building
 // Below this many free bytes in the TLSF link pool (not the general heap --
-// see J_ram()/free_pool), sm_links_watchdog() starts closing the oldest
-// active Link to make room, regardless of how recently it was used. Override
+// see J_ram()/free_pool), sm_links_watchdog() starts closing links to make
+// room -- unfinished handshakes first, then the least recently heard -- even
+// ones not idle long enough for the normal timeout. nRF52 pool builds only. Override
 // per-board/environment with a build flag (platformio.ini: build_flags =
 // -DSM_MIN_POOL_FREE=15360) rather than editing this -- boards that don't
 // set one keep this default.
 #ifndef SM_MIN_POOL_FREE
 #define SM_MIN_POOL_FREE (10*1024)
 #endif
+static uint32_t sm_links_closed_stuck = 0, sm_links_closed_idle = 0, sm_links_closed_mem = 0;   // sm_links_watchdog(), shown on Health and /api/sys
 #define SM_DFU_MAGIC     0x5D     // GPREGRET2 value asking the next boot for a BLE update window
 #define SM_DFU_WINDOW_MS (20UL * 60UL * 1000UL)
 #define SM_TRIAL_MS      (5UL * 60UL * 1000UL)
@@ -1265,6 +1267,7 @@ static void pg_health() {
   P(DIM("Pkts") " rx %lu, tx %lu\n", (unsigned long)(lora_interface ? lora_interface.rx() : 0), (unsigned long)(lora_interface ? lora_interface.tx() : 0));
   P(DIM("Tables") " paths %u/%u, ann %u\nknown %u, links %u, nbrs %u\n", (unsigned)RNS::Transport::new_path_table().size(), (unsigned)RNS::Transport::path_table_maxsize(),
     (unsigned)RNS::Transport::announce_table().size(), (unsigned)RNS::Identity::known_destinations().size(), (unsigned)RNS::Transport::active_links().size(), (unsigned)sm_nbrs.size());
+  P(DIM("Closed") " stuck %lu, idle %lu, mem %lu\n", (unsigned long)sm_links_closed_stuck, (unsigned long)sm_links_closed_idle, (unsigned long)sm_links_closed_mem);
   PBACK();
 }
 
@@ -1722,6 +1725,8 @@ static void J_ram() {
   P("\"free_ram\":%u,\"free_flash\":%u,\"free_pool\":%u,\"pool_fragmented\":%u",
     (unsigned)RNS::Utilities::Memory::heap_available(), (unsigned)RNS::Utilities::OS::storage_available(),
     (unsigned)RNS::Utilities::Memory::heap_pool_free(), (unsigned)RNS::Utilities::Memory::heap_pool_fragmented());
+  P(",\"links_closed_stuck\":%lu,\"links_closed_idle\":%lu,\"links_closed_mem\":%lu",
+    (unsigned long)sm_links_closed_stuck, (unsigned long)sm_links_closed_idle, (unsigned long)sm_links_closed_mem);
 }
 #ifdef HAS_ENV_SENSORS
 static void J_env() {
@@ -1932,41 +1937,62 @@ void sm_boot() {
 // env fetches it fresh via git on every dependency refresh (platformio.ini)
 // -- everything needed is already public API.
 //
-// No real keepalive probing: this node is almost always the destination
-// side (NomadNet clients open links to us), so a pure inactivity timeout is
-// the right tradeoff -- we're not the side responsible for keeping a link
-// warm. teardown()/status(set) aren't const methods, and std::set elements
-// are always const on iteration (an STL ordering-invariant rule, not a
-// microReticulum one -- true even over a local non-const copy of the set),
-// so each Link has to be copied out individually via its copy constructor
-// to get a mutable handle -- still the same underlying shared object.
+// Same rules as Python RNS's per-link watchdog thread, run from this loop
+// instead (a thread per link would cost a stack each):
+//  - PENDING/HANDSHAKE past its establishment_timeout (Link::validate_request
+//    sets it per hop for incoming links) is a handshake that never finished --
+//    incoming links sit in active_links, not pending_links, while handshaking;
+//  - an established link that has received nothing for STALE_TIME +
+//    STALE_GRACE (725 s) is dead. Live NomadNet/MeshChat clients send a
+//    keepalive every KEEPALIVE (360 s), which updates last_inbound, so they
+//    never get near it. no_inbound_for(), not inactive_for(): the latter is a
+//    min() with our own sends, so a peer we keep sending to after it has gone
+//    would look alive.
+// teardown() closes any non-CLOSED link (LINKCLOSE unless PENDING); Transport's
+// own sweep then drops it from active_links. teardown()/status(set) aren't
+// const methods, and std::set elements are always const on iteration (an STL
+// ordering-invariant rule, not a microReticulum one), so each Link is copied
+// out via its copy constructor to get a mutable handle -- still the same
+// underlying shared object.
 // ---------------------------------------------------------------------------
+static bool sm_link_handshaking(const RNS::Link& link) {
+  return link.status() == RNS::Type::Link::PENDING || link.status() == RNS::Type::Link::HANDSHAKE;
+}
+
 static void sm_links_watchdog() {
+  double now = RNS::Utilities::OS::time();
   for (const auto& ref : RNS::Transport::active_links()) {
     RNS::Link link = ref;
     if (link.status() == RNS::Type::Link::CLOSED) continue;   // Transport's own sweep reaps it
-    double idle = link.inactive_for();
-    if (idle > RNS::Type::Transport::LINK_TIMEOUT) link.teardown();
-    else if (idle > RNS::Type::Link::STALE_TIME) link.status(RNS::Type::Link::STALE);
+    if (sm_link_handshaking(link)) {
+      double age = link.request_time() > 0 ? now - link.request_time() : link.no_inbound_for();
+      if (age > std::max(link.establishment_timeout(), 30.0)) { link.teardown(); ++sm_links_closed_stuck; }
+    }
+    else if (link.no_inbound_for() > RNS::Type::Link::STALE_TIME + RNS::Type::Link::STALE_GRACE) { link.teardown(); ++sm_links_closed_idle; }
   }
 
-  // Memory-pressure guard: regardless of idle time, keep closing the oldest
-  // active link while the TLSF link pool is critically low (see J_ram()/
-  // free_pool -- this is the pool itself, not the general system heap).
-  // inactive_for() can't pick a victim here: it's a min() of in/out activity,
-  // so a client stuck retrying a dead handshake looks "freshest" and would
-  // wrongly survive every pass. request_time() (when the link was first
-  // established) has no such blind spot -- oldest first, no exceptions.
+  // Memory-pressure guard: regardless of idle time, keep closing one link
+  // while the TLSF link pool is critically low (see J_ram()/free_pool -- the
+  // pool itself, not the general system heap). Victim: unfinished handshakes
+  // first (most likely dead), then whichever link has heard nothing for
+  // longest -- not the oldest-opened, which may be a long session in use.
+  // Only on builds whose Reticulum containers live in that pool (nRF52, e.g.
+  // the P1): on ESP32 builds using PSRAM or the plain heap the pool is never
+  // created, heap_pool_free() reads 0, and this would close every link on
+  // every pass.
+  if (RNS::Utilities::Memory::heap_pool_size() == 0) return;
   while (RNS::Utilities::Memory::heap_pool_free() < SM_MIN_POOL_FREE) {
-    RNS::Link oldest; bool found = false; double oldest_time = 0;
+    RNS::Link victim; bool found = false, victim_hs = false; double victim_idle = 0;
     for (const auto& ref : RNS::Transport::active_links()) {
       RNS::Link link = ref;
       if (link.status() == RNS::Type::Link::CLOSED) continue;
-      if (!found || link.request_time() < oldest_time) { oldest = link; oldest_time = link.request_time(); found = true; }
+      bool hs = sm_link_handshaking(link); double idle = link.no_inbound_for();
+      if (!found || (hs && !victim_hs) || (hs == victim_hs && idle > victim_idle)) { victim = link; victim_hs = hs; victim_idle = idle; found = true; }
     }
     if (!found) break;  // nothing left to close -- pressure isn't coming from links
-    NOTICEF("[links] pool low (%u bytes free), closing oldest link", (unsigned)RNS::Utilities::Memory::heap_pool_free());
-    oldest.teardown();
+    NOTICEF("[links] pool low (%u bytes free), closing %s link idle %us", (unsigned)RNS::Utilities::Memory::heap_pool_free(),
+      victim_hs ? "unfinished" : "least recently heard", (unsigned)victim_idle);
+    victim.teardown(); ++sm_links_closed_mem;
   }
 }
 
@@ -2005,7 +2031,7 @@ void sm_loop() {
     if (low && sm.pwr_act == 1 && !sm_power_limited && lora_txp > 10) { sm_saved_txp = lora_txp; lora_txp = 10; setTXPower(); sm_power_limited = true; NOTICE("[power] low battery, TX power lowered"); }
     else if (sm_power_limited && recovered) { lora_txp = sm_saved_txp; setTXPower(); sm_power_limited = false; NOTICE("[power] battery recovered, TX power restored"); }
   }
-  // stale-link watchdog, every 30s -- cheap against a 900s (LINK_TIMEOUT) threshold
+  // stale-link watchdog, every 30s -- cheap against a 725s (STALE_TIME + STALE_GRACE) threshold
   static uint32_t last_links_check = 0;
   if (now - last_links_check > 30000UL) { last_links_check = now; sm_links_watchdog(); }
 #ifdef SM_HISTORY
