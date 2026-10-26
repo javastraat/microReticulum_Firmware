@@ -122,6 +122,15 @@
 #define SM_HOME_BUDGET   400
 #define SM_HARD_LIMIT    409      // 431 B link MDU minus response framing
 #define SM_RAM_FLOOR     8192     // below this, answer "busy" instead of building
+// Below this many free bytes in the TLSF link pool (not the general heap --
+// see J_ram()/free_pool), sm_links_watchdog() starts closing the oldest
+// active Link to make room, regardless of how recently it was used. Override
+// per-board/environment with a build flag (platformio.ini: build_flags =
+// -DSM_MIN_POOL_FREE=15360) rather than editing this -- boards that don't
+// set one keep this default.
+#ifndef SM_MIN_POOL_FREE
+#define SM_MIN_POOL_FREE (10*1024)
+#endif
 #define SM_DFU_MAGIC     0x5D     // GPREGRET2 value asking the next boot for a BLE update window
 #define SM_DFU_WINDOW_MS (20UL * 60UL * 1000UL)
 #define SM_TRIAL_MS      (5UL * 60UL * 1000UL)
@@ -1939,6 +1948,25 @@ static void sm_links_watchdog() {
     double idle = link.inactive_for();
     if (idle > RNS::Type::Transport::LINK_TIMEOUT) link.teardown();
     else if (idle > RNS::Type::Link::STALE_TIME) link.status(RNS::Type::Link::STALE);
+  }
+
+  // Memory-pressure guard: regardless of idle time, keep closing the oldest
+  // active link while the TLSF link pool is critically low (see J_ram()/
+  // free_pool -- this is the pool itself, not the general system heap).
+  // inactive_for() can't pick a victim here: it's a min() of in/out activity,
+  // so a client stuck retrying a dead handshake looks "freshest" and would
+  // wrongly survive every pass. request_time() (when the link was first
+  // established) has no such blind spot -- oldest first, no exceptions.
+  while (RNS::Utilities::Memory::heap_pool_free() < SM_MIN_POOL_FREE) {
+    RNS::Link oldest; bool found = false; double oldest_time = 0;
+    for (const auto& ref : RNS::Transport::active_links()) {
+      RNS::Link link = ref;
+      if (link.status() == RNS::Type::Link::CLOSED) continue;
+      if (!found || link.request_time() < oldest_time) { oldest = link; oldest_time = link.request_time(); found = true; }
+    }
+    if (!found) break;  // nothing left to close -- pressure isn't coming from links
+    NOTICEF("[links] pool low (%u bytes free), closing oldest link", (unsigned)RNS::Utilities::Memory::heap_pool_free());
+    oldest.teardown();
   }
 }
 
