@@ -1703,7 +1703,17 @@ static void J_net() {
   P("\"routes\":%u,\"neighbours\":%u,\"rx\":%lu,\"tx\":%lu,\"links\":%u", (unsigned)RNS::Transport::new_path_table().size(), (unsigned)sm_nbrs.size(),
     (unsigned long)(lora_interface ? lora_interface.rx() : 0), (unsigned long)(lora_interface ? lora_interface.tx() : 0), (unsigned)RNS::Transport::active_links().size());
 }
-static void J_ram() { P("\"free_ram\":%u,\"free_flash\":%u", (unsigned)RNS::Utilities::Memory::heap_available(), (unsigned)RNS::Utilities::OS::storage_available()); }
+// free_ram is the general system heap (dbgHeapFree on nRF52) -- NOT the TLSF
+// pool Reticulum Links/Packets/Bytes actually allocate from (RNS_CONTAINER_
+// ALLOCATOR=RNS_HEAP_POOL_ALLOCATOR, see platformio.ini). free_pool/
+// pool_fragmented expose that pool directly, so link-driven memory pressure
+// is actually visible instead of inferred from a stat that doesn't move
+// with link count.
+static void J_ram() {
+  P("\"free_ram\":%u,\"free_flash\":%u,\"free_pool\":%u,\"pool_fragmented\":%u",
+    (unsigned)RNS::Utilities::Memory::heap_available(), (unsigned)RNS::Utilities::OS::storage_available(),
+    (unsigned)RNS::Utilities::Memory::heap_pool_free(), (unsigned)RNS::Utilities::Memory::heap_pool_fragmented());
+}
 #ifdef HAS_ENV_SENSORS
 static void J_env() {
   if (!EnvSensors::installed() && !EnvSensors::power_n) { P("\"error\":\"no sensor\""); return; }
