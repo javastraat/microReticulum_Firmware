@@ -375,6 +375,10 @@ static const char* Q(const char* key) { for (uint8_t i = 0; i < sm_nkv; i++) if 
 static bool Qhas(const char* key) { for (uint8_t i = 0; i < sm_nkv; i++) if (!strcmp(sm_kv[i].k, key)) return true; return false; }
 static const char* Fv(const char* n) { char k[16]; snprintf(k, sizeof k, "field_%s", n); return Q(k); }
 static const char* Vv(const char* n) { char k[16]; snprintf(k, sizeof k, "var_%s", n); return Q(k); }
+// API paging keys: raw request-data keys (scripts) or NomadNet link variables
+// (`/api/links`s=1|n=4` in a browser arrives as var_s, var_n).
+static const char* Qa(const char* k) { return Qhas(k) ? Q(k) : Vv(k); }
+static bool Qahas(const char* k) { char v[16]; snprintf(v, sizeof v, "var_%s", k); return Qhas(k) || Qhas(v); }
 static bool Fis(const char* n, const char* v) { return !strcmp(Fv(n), v); }
 static bool Vis(const char* n, const char* v) { return !strcmp(Vv(n), v); }
 
@@ -1702,7 +1706,7 @@ static void pg_history() {
 // /api/hist: newest first, `o` hours back, `n` rows (default 6, max 24).
 static void J_hist() {
   RNS::Bytes b; size_t n = sm_hist_read(b); const SmHist* h = (const SmHist*)b.data();
-  int o = atoi(Q("o")), want = Qhas("n") ? atoi(Q("n")) : 6;
+  int o = atoi(Qa("o")), want = Qahas("n") ? atoi(Qa("n")) : 6;
   if (o < 0) o = 0;
   if (want < 1) want = 1;
   if (want > 24) want = 24;
@@ -1827,7 +1831,7 @@ static void api_reply(const char* path) {
   }
   bool paths = !strcmp(e, "paths"), nbrs = !strcmp(e, "nbrs"), links = !strcmp(e, "links");
   if (!paths && !nbrs && !links) { P("{\"error\":\"unknown endpoint\",\"see\":\"/api\"}"); return; }
-  SmApiCtx c{!strcmp(Q("s"), "1"), atoi(Q("o")), Qhas("n") ? atoi(Q("n")) : 5, 0, 0, false, RNS::Utilities::OS::time()};
+  SmApiCtx c{!strcmp(Qa("s"), "1"), atoi(Qa("o")), Qahas("n") ? atoi(Qa("n")) : 5, 0, 0, false, RNS::Utilities::OS::time()};
   if (c.o < 0) c.o = 0;
   if (c.n < 1) c.n = 1;
   if (c.n > 15) c.n = 15;
