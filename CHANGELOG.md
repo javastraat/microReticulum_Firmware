@@ -33,6 +33,7 @@
 
 ### Changed
 
+- Solar Node P1: the link-pool floor is 15 KB (`-DSM_MIN_POOL_FREE=15360`) instead of the 10 KB default, as measured on a live repeater: about 2 KB per link, and a full day at this floor with up to 21 links open ran without a TX stall.
 - The JSON API is always on. The "Telemetry API" checkbox on the Home page layout page is gone: it switched `/api/...` for everyone (including Node-RED feeds) but changed nothing on the home page, and a disabled API still cost the same link and request airtime.
 - Telemetry page shows sea-level pressure (from the height set on the Map page) instead of an altitude worked out from the standard 1013.25 hPa, which drifted with the weather (an Amsterdam roof read 160 m). `/api/env` keeps its `altitude` field.
 - Heltec V4 button: hold-to-sleep removed (unsafe on a roof-mounted repeater); single click toggles the display, double click announces, hold sends a 5x announce burst.
