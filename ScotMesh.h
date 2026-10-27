@@ -156,7 +156,7 @@ enum : uint8_t { SMH_BAT = 1, SMH_UP = 2, SMH_RADIO = 4, SMH_PATHS = 8, SMH_AIR 
 struct SmConfig {
   uint32_t magic = 0x31434D53;           // "SMC1"
   uint8_t  home = SMH_BAT | SMH_UP | SMH_PATHS | SMH_OP | SMH_ROUTES;
-  uint8_t  api = 1;
+  uint8_t  api = 1;                      // unused: the JSON API is always on (kept so stored configs load)
   uint8_t  leds = 0;                     // 0 on, 1 off, 2 first 10 min after start
   uint8_t  pw_on = 0, pw_approval = 0, pw_set = 0;
   uint8_t  pw_salt[16] = {0};
@@ -985,7 +985,8 @@ static bool sm_route_row(const RNS::Bytes& k, uint8_t hops, double heard, const 
   c.rows++; return true;
 }
 static void pg_list(bool routes, const RNS::Bytes& rid) {
-  if (!(sm.home & SMH_ROUTES) && !sm_is_admin(rid)) { pg_denied(rid); return; }
+  bool admin = sm_is_admin(rid);
+  if (!(sm.home & SMH_ROUTES) && !admin) { pg_denied(rid); return; }
   char pg = routes ? 'r' : 'b';
   bool form = Vis("a", "1");
   // Default to short hashes (less airtime per page) unless the request says
@@ -998,7 +999,7 @@ static void pg_list(bool routes, const RNS::Bytes& rid) {
   size_t total = routes ? RNS::Transport::new_path_table().size() : sm_nbrs.size();
   if (routes) P("#!c=0\n>Routes " DIM("%u " MIDDOT " hops " MIDDOT " heard " MIDDOT " name?") "\n", (unsigned)total);
   else P("#!c=0\n>Neighbours " DIM("heard " MIDDOT " name") "\n");
-  SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0))};   // room for the footer (+ back link)
+  SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0) - (admin ? 26 : 0))};   // room for the footer (+ back link, + Visitors)
   if (routes) sm_walk_paths(sm_route_row, &c);
   else for (size_t i = o; i < sm_nbrs.size(); i++) {
     if (c.rows >= n) { c.more = true; break; }
@@ -1013,7 +1014,9 @@ static void pg_list(bool routes, const RNS::Bytes& rid) {
   if (o > 0) { P(" "); PLf("back", pg, "s=%d|n=%d|o=%d", shrt, n, o > n ? o - n : 0); }
   char nb[4]; snprintf(nb, sizeof nb, "%d", n);
   P("\nShort "); PC("s", shrt); P(" Rows "); PF(2, "n", nb); P(" "); PL("Apply", pg, "s|n|a=1");
-  P("\n"); PL(routes ? "Neighbours" : "Routes", routes ? 'b' : 'r'); P("  "); PL("Home", 'I');
+  P("\n"); PL(routes ? "Neighbours" : "Routes", routes ? 'b' : 'r'); P("  ");
+  if (admin) { PL("Visitors", 'v'); P("  "); }
+  PL("Home", 'I');
 }
 
 static void pg_register(const RNS::Bytes& rid) {
@@ -1110,6 +1113,69 @@ static void P_relay_name(const RNS::Bytes& t) {
   std::string h = t.toHex(); h.resize(8);
   if (name && name[0]) P("%s " DIM("%s"), name, h.c_str()); else P("%s", h.c_str());
 }
+// Open links as /api/links and the Visitors page show them: longest silent
+// first, since those are the ones sm_links_watchdog() / the pool cap close next.
+typedef std::pair<double, RNS::Link> SmLinkBySilence;   // silence taken once, so the sort sees fixed keys
+static std::vector<SmLinkBySilence> sm_links_by_silence() {
+  std::vector<SmLinkBySilence> ls;
+  for (const auto& ref : RNS::Transport::active_links()) { RNS::Link l = ref; ls.emplace_back(l.no_inbound_for(), l); }
+  std::sort(ls.begin(), ls.end(), [](const SmLinkBySilence& a, const SmLinkBySilence& b) { return a.first > b.first; });
+  return ls;
+}
+// st: p(ending) h(andshake) a(ctive) s(tale) c(losed); hops/rssi from the last
+// packet seen on it (0 once it has dropped out of sm_ls); rid: the visitor's
+// identity if it identified itself; name: that visitor's announced name; via:
+// the repeater that delivers a 2+ hop link, as on the Admin page ("?" = guessed
+// by signal). Empty strings where unknown.
+struct SmLinkRow { char st; long age_s, in_s; uint8_t hops; int16_t rssi; RNS::Bytes rid; char name[17], via[18]; };
+static void sm_link_row(RNS::Link& l, double in_s, double now, SmLinkRow& r) {
+  static const char ST[] = "phasc";
+  uint8_t st = l.status(); r.st = st < 5 ? ST[st] : '?';
+  r.age_s = l.request_time() > 0 ? (long)(now - l.request_time()) : -1; r.in_s = (long)in_s;
+  const RNS::Identity& ri = l.get_remote_identity(); r.rid = ri ? ri.hash() : RNS::Bytes{};
+  const SmLinkSeen* seen = sm_link_find(l.link_id());
+  r.hops = seen ? seen->hops : 0; r.rssi = seen ? seen->rssi : 0;
+  char nb[17]; const char* n = sm_ident_name(r.rid, nb); strcpy(r.name, n ? n : "");
+  r.via[0] = 0;
+  if (seen && seen->hops > 1) {
+    bool guessed; RNS::Bytes t = sm_last_hop(r.rid, seen->rssi, seen->rssi != 0, guessed);
+    if (t) {
+      char vb[17]; const char* vn = sm_dest_name(sm_dest_of("nomadnetwork", "node", t), vb);
+      if (vn) strcpy(r.via, vn); else { std::string h = t.toHex(); h.resize(8); strcpy(r.via, h.c_str()); }
+      if (guessed) strcat(r.via, "?");
+    }
+  }
+}
+// Visitors (admin only): who holds a link to this node right now.
+static void pg_visitors() {
+  int o = atoi(Vv("o")); if (o < 0) o = 0;
+  const int n = 10;
+  auto ls = sm_links_by_silence(); double now = RNS::Utilities::OS::time();
+  P("#!c=0\n>Visitors " DIM("%u " MIDDOT " silent " MIDDOT " hops " MIDDOT " who") "\n", (unsigned)ls.size());
+  const size_t limit = SM_HOME_BUDGET - 150 - (o > 0 ? 36 : 0);   // room for the footer (+ back link)
+  int rows = 0; bool more = false;
+  for (size_t i = o; i < ls.size(); i++) {
+    if (rows >= n) { more = true; break; }
+    SmLinkRow r; sm_link_row(ls[i].second, ls[i].first, now, r);
+    char age[8]; std::string id = ls[i].second.link_id().toHex(); id.resize(8);
+    std::string who = r.name[0] ? std::string(r.name) : r.rid ? r.rid.toHex().substr(0, 8) : std::string("anon");
+    size_t before = sm_pn;
+    P("%s %s ", id.c_str(), sm_age(r.in_s, age));
+    if (r.hops) P("%u ", r.hops); else P("? ");
+    P("%s", who.c_str());
+    if (r.st != 'a') P(" " DIM("%c"), r.st);
+    if (r.via[0]) P(" " DIM("via") " %s", r.via);
+    P("\n");
+    if (sm_pn > limit) { pb_cut(before); more = true; break; }
+    rows++;
+  }
+  if (ls.empty()) P(DIM("Nobody connected"));
+  else P(DIM("%d-%d/%u"), rows ? o + 1 : o, o + rows, (unsigned)ls.size());
+  if (more) { P(" "); PLf("next", 'v', "o=%d", o + rows); }
+  if (o > 0) { P(" "); PLf("back", 'v', "o=%d", o > n ? o - n : 0); }
+  P("\n"); PL("Routes", 'r'); P("  "); PL("Neighbours", 'b'); P("  "); PL("Home", 'I');
+}
+
 static void pg_hub(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
   Ph(nomadnet_name); P("%d%% " MIDDOT " up %s\n", sm_pct(), sm_up());
   if (const SmLinkSeen* l = sm_link_find(link_id)) {   // the admin home view usually runs over budget and drops it
@@ -1150,7 +1216,8 @@ static void pg_access() {
   Ph("Access"); P_item("Admins", 'k', a); P_item("Password", 'p', sm.pw_on ? "on" : "off"); P_item("Change log", 'j', c); P("\n"); PBACK();
 }
 static void pg_device() {
-  Ph("Device"); P_item("Health", 'e'); P_item("Lights & Bluetooth", 'i', sm.leds == 0 ? "lights on" : sm.leds == 1 ? "lights off" : "lights 10 min");
+  Ph("Device"); P_item("Health", 'e');
+  PL("Routes", 'r'); P("  "); PL("Neighbours", 'b'); P("  "); PL("Visitors", 'v'); P("\n"); P_item("Lights & Bluetooth", 'i', sm.leds == 0 ? "lights on" : sm.leds == 1 ? "lights off" : "lights 10 min");
   P_item("Logs", 'o'); P_item("Maintenance", 'x'); P_item("Restart & update", 'm'); P_item("About", 'u'); P("\n"); PBACK();
 }
 
@@ -1193,10 +1260,10 @@ static void pg_name(const RNS::Bytes& rid) {
 static void pg_homelayout(const RNS::Bytes& rid) {
   static const struct { uint8_t bit; const char* k; const char* l; } K[] = {{SMH_BAT, "b", "Battery"}, {SMH_UP, "u", "Uptime"}, {SMH_RADIO, "r", "Radio"}, {SMH_PATHS, "d", "Paths"}, {SMH_AIR, "x", "Airtime"}, {SMH_OP, "o", "Operator"}, {SMH_ROUTES, "p", "Routes pages"}, {SMH_NOLINK, "lk", "Visitor's link (hops, signal)"}};
   const char* msg = nullptr;
-  if (Vis("a", "s")) { uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1") != (k.bit == SMH_NOLINK)) h |= k.bit; sm.home = h; sm.api = Fis("api", "1"); sm_save(); sm_change(rid, "home page layout"); msg = "Saved."; }
+  if (Vis("a", "s")) { uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1") != (k.bit == SMH_NOLINK)) h |= k.bit; sm.home = h; sm_save(); sm_change(rid, "home page layout"); msg = "Saved."; }
   Ph("Home page"); Pmsg('o', msg); P(DIM("Ticked = public") "\n");
   for (auto& k : K) { PC(k.k, !(sm.home & k.bit) == (k.bit == SMH_NOLINK)); P(" %s\n", k.l); }
-  PC("api", sm.api); P(" Telemetry API\n"); PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK();
+  PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK();
 }
 
 static void pg_map(const RNS::Bytes& rid) {
@@ -1800,7 +1867,6 @@ static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, con
   c.rows++; return true;
 }
 static void api_reply(const char* path) {
-  if (!sm.api) { P("{\"error\":\"api disabled\"}"); return; }
   const char* e = path + 4; if (*e == '/') e++;
   if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"links\",\"all\"" SM_API_ENV_NAME SM_API_HIST_NAME "]}"); return; }
   if (!strcmp(e, "bat")) { P("{"); J_bat(); P("}"); return; }
@@ -1839,44 +1905,21 @@ static void api_reply(const char* path) {
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"dest\",\"hops\",\"age_s\",\"via\"],\"rows\":[", (unsigned)RNS::Transport::new_path_table().size(), c.o);
     sm_walk_paths(sm_api_path_row, &c);
   } else if (links) {
-    // Who holds the open links: longest silent first, since those are the
-    // ones sm_links_watchdog() / the pool cap will close next. st: p(ending)
-    // h(andshake) a(ctive) s(tale) c(losed); in_s = seconds since anything
-    // was received on it; hops/rssi from the last packet seen on it (null
-    // once it has dropped out of sm_ls); who = the visitor's identity if it
-    // identified itself, else null; name/via: see below.
-    std::vector<std::pair<double, RNS::Link>> ls;   // silence taken once, so the sort sees fixed keys
-    for (const auto& ref : RNS::Transport::active_links()) { RNS::Link l = ref; ls.emplace_back(l.no_inbound_for(), l); }
-    std::sort(ls.begin(), ls.end(), [](const std::pair<double, RNS::Link>& a, const std::pair<double, RNS::Link>& b) { return a.first > b.first; });
+    // cols as SmLinkRow; who/name/via null where unknown
+    auto ls = sm_links_by_silence();
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"link\",\"st\",\"age_s\",\"in_s\",\"hops\",\"rssi\",\"who\",\"name\",\"via\"],\"rows\":[", (unsigned)ls.size(), c.o);
     for (size_t i = c.o; i < ls.size(); i++) {
       if (c.rows >= c.n) { c.more = true; break; }
-      RNS::Link& l = ls[i].second;
-      std::string id = l.link_id().toHex(); if (c.shrt) id.resize(8);
-      const RNS::Identity& ri = l.get_remote_identity();
-      RNS::Bytes rid = ri ? ri.hash() : RNS::Bytes{};
-      std::string who = rid.toHex(); if (c.shrt && who.size() > 8) who.resize(8);
-      const SmLinkSeen* seen = sm_link_find(l.link_id());
+      SmLinkRow r; sm_link_row(ls[i].second, ls[i].first, c.now, r);
+      std::string id = ls[i].second.link_id().toHex(); if (c.shrt) id.resize(8);
+      std::string who = r.rid.toHex(); if (c.shrt && who.size() > 8) who.resize(8);
+      auto js = [](const char* v) { if (!*v) return std::string("null"); char t[20]; strncpy(t, v, 19); t[19] = 0; J_clean(t); return "\"" + std::string(t) + "\""; };
       char hops[6] = "null", rssi[8] = "null";
-      if (seen) { snprintf(hops, sizeof hops, "%u", seen->hops); if (seen->rssi) snprintf(rssi, sizeof rssi, "%d", seen->rssi); }
-      // name: the visitor's announced name (identified visitors only); via: the
-      // repeater that delivers a 2+ hop link, as on the Admin page ("?" = guessed by signal)
-      char nb[17], vb[17], name[24] = "null", via[28] = "null";
-      if (const char* n = sm_ident_name(rid, nb)) { char t[17]; strcpy(t, n); J_clean(t); snprintf(name, sizeof name, "\"%s\"", t); }
-      if (seen && seen->hops > 1) {
-        bool guessed; RNS::Bytes t = sm_last_hop(rid, seen->rssi, seen->rssi != 0, guessed);
-        if (t) {
-          const char* n = sm_dest_name(sm_dest_of("nomadnetwork", "node", t), vb); char v[17];
-          if (n) strcpy(v, n); else { std::string h = t.toHex(); h.resize(8); strcpy(v, h.c_str()); }
-          J_clean(v); snprintf(via, sizeof via, "\"%s%s\"", v, guessed ? "?" : "");
-        }
-      }
-      static const char ST[] = "phasc";
-      uint8_t st = l.status(); double age = l.request_time() > 0 ? c.now - l.request_time() : -1;
+      if (r.hops) snprintf(hops, sizeof hops, "%u", r.hops);
+      if (r.rssi) snprintf(rssi, sizeof rssi, "%d", r.rssi);
       size_t before = sm_pn;
-      std::string whoj = who.empty() ? std::string("null") : "\"" + who + "\"";
-      P("%s[\"%s\",\"%c\",%ld,%ld,%s,%s,%s,%s,%s]", c.rows ? "," : "", id.c_str(),
-        st < 5 ? ST[st] : '?', (long)age, (long)ls[i].first, hops, rssi, whoj.c_str(), name, via);
+      P("%s[\"%s\",\"%c\",%ld,%ld,%s,%s,%s,%s,%s]", c.rows ? "," : "", id.c_str(), r.st, r.age_s, r.in_s, hops, rssi,
+        js(who.c_str()).c_str(), js(r.name).c_str(), js(r.via).c_str());
       if (sm_pn > SM_HOME_BUDGET - 16) { pb_cut(before); c.more = true; break; }
       c.rows++;
     }
@@ -1930,6 +1973,7 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
       case 'p': pg_password(rid); break;
       case 'j': pg_changes(); break;
       case 'e': pg_health(); break;
+      case 'v': pg_visitors(); break;
       case 'i': pg_lights_bt(rid); break;
       case 'o': pg_logs(); break;
       case 'x': pg_maint(rid); break;
@@ -1952,7 +1996,7 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
   return RNS::Bytes(packer.data(), packer.size());
 }
 
-static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu" SM_IDS_ENV SM_IDS_HIST;
+static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmuv" SM_IDS_ENV SM_IDS_HIST;
 static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs", "/api/links" SM_API_ENV SM_API_HIST};
 
 void sm_register(RNS::Destination& dest) {

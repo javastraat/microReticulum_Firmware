@@ -55,7 +55,7 @@
 
 <details>
 <summary><kbd>b</kbd> <code>/page/b.mu</code> &mdash; Neighbours</summary>
-<p>Peers this node has heard announce: destination hash &middot; time since heard &middot; name, paginated.</p>
+<p>Peers this node has heard announce: destination hash &middot; time since heard &middot; name, paginated. Routes and Neighbours link to each other; admins also get a Visitors link.</p>
 </details>
 
 <details>
@@ -106,7 +106,6 @@
 <summary><kbd>h</kbd> <code>/page/h.mu</code> &mdash; Home page</summary>
 <ul>
   <li>Checkboxes for what a visitor sees: battery, uptime, radio, paths, airtime, operator, routes-link</li>
-  <li>Telemetry API on/off switch</li>
   <li>"Preview" link &mdash; see the visitor view live</li>
 </ul>
 </details>
@@ -193,7 +192,7 @@
 
 <details>
 <summary><kbd>d</kbd> <code>/page/d.mu</code> &mdash; Device hub</summary>
-<p>Menu into the five pages below.</p>
+<p>Menu into the pages below, plus one row linking Routes, Neighbours and Visitors.</p>
 </details>
 
 <details>
@@ -203,6 +202,11 @@
   <li>Radio noise floor, last RSSI/SNR, current + average airtime %</li>
   <li>Packets rx/tx, path/announce/known-destination/link/neighbour table sizes</li>
 </ul>
+</details>
+
+<details>
+<summary><kbd>v</kbd> <code>/page/v.mu</code> &mdash; Visitors</summary>
+<p>Admin only. Who has a link open to the node right now, longest silent first (those are closed first by the link watchdog): short link id &middot; time since anything was received &middot; hops &middot; who. "who" is the visitor's announced name if they identified themselves, else their short identity hash, else "anon". 2+ hop links add "via" and the repeater they come through ("?" = guessed by signal). A dim letter marks links not yet active (p, h) or stale (s). 10 per page. Same data as <code>/api/links</code>.</p>
 </details>
 
 <details>
@@ -294,7 +298,7 @@
 
 <section id="api">
 <h2>JSON API</h2>
-<p class="lede">Same destination as the pages above, plain JSON replies &mdash; for scripts and dashboards rather than browsing. Toggled by the Telemetry API switch on the Home page settings.</p>
+<p class="lede">Same destination as the pages above, plain JSON replies &mdash; for scripts and dashboards rather than browsing. Always on: everything here is public anyway (device state and announce data).</p>
 
 <table class="api">
 <thead><tr><th>Endpoint</th><th>Fields</th><th>Notes</th></tr></thead>

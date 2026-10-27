@@ -12,6 +12,7 @@
 - Opt-in power-saving build flags for ESP32 boards (160 MHz underclock + loop-yield idle gating), enabled for Heltec V4.
 - "Your link" line on the NomadNet home page: how many hops the visitor's request took, plus RSSI/SNR of the last hop when it arrived over LoRa. Read from the raw packet header in the receive hook, no library change. On by default, can be hidden on the Home page layout page; admins see it on the Admin page instead, and the admin home view shortens the verified identity to 8 characters (full hash on the Admin page) so Radio and Airtime fit again. For 2+ hop links the Admin page also names the last hop: from the path table towards the admin's own LXMF/NomadNet address, else guessed from the signal of recently heard repeaters (marked with "?").
 - `/api/links`: the open Reticulum links, longest silent first, with state, age, seconds since anything was received, hops/RSSI of the last packet, the visitor's identity and announced name if it identified itself, and for 2+ hop links the repeater it comes through. Shows who is holding links open when the count climbs.
+- Visitors page (`/page/v.mu`, admin only): who has a link open to the node, longest silent first, with time since anything was received, hops, the visitor's name (or short identity, or "anon") and the repeater a 2+ hop link comes through. Admin → Device gets a "Routes  Neighbours  Visitors" row; Routes and Neighbours link to Visitors for admins.
 
 ### Fixed
 
@@ -32,6 +33,7 @@
 
 ### Changed
 
+- The JSON API is always on. The "Telemetry API" checkbox on the Home page layout page is gone: it switched `/api/...` for everyone (including Node-RED feeds) but changed nothing on the home page, and a disabled API still cost the same link and request airtime.
 - Telemetry page shows sea-level pressure (from the height set on the Map page) instead of an altitude worked out from the standard 1013.25 hPa, which drifted with the weather (an Amsterdam roof read 160 m). `/api/env` keeps its `altitude` field.
 - Heltec V4 button: hold-to-sleep removed (unsafe on a roof-mounted repeater); single click toggles the display, double click announces, hold sends a 5x announce burst.
 - WiFi update window moved to `10.73.73.1`, clear of common home-network ranges, with upload progress and a clear message if the connection drops.
