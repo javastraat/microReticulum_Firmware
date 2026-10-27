@@ -1076,13 +1076,33 @@ static RNS::Bytes sm_last_hop(const RNS::Bytes& rid, int16_t rssi, bool sig, boo
 }
 // A repeater's name: ScotMesh nodes announce NomadNet from their transport identity,
 // so its NomadNet address follows from the transport id; Python nodes stay a hash.
-static void P_relay_name(const RNS::Bytes& t) {
-  RNS::Bytes d = sm_dest_of("nomadnetwork", "node", t); const char* name = sm_nbr_name(d); char buf[17] = "";
-  if (!name || !name[0]) {
-    RNS::Bytes ad = RNS::Identity::recall_app_data(d); size_t l = ad.size() < 16 ? ad.size() : 16; bool ok = l > 0;
-    for (size_t k = 0; k < l; k++) { uint8_t c = ad.data()[k]; if (c < 0x20 || c == '`') ok = false; }
-    if (ok) { memcpy(buf, ad.data(), l); buf[l] = 0; name = buf; }
+// Name a destination announced with: the neighbour cache first, else the
+// announce's app_data -- raw text for NomadNet nodes, msgpack [name, stamp
+// cost] for LXMF delivery. buf: 17 bytes. nullptr if there's no usable name.
+static const char* sm_dest_name(const RNS::Bytes& d, char* buf) {
+  const char* n = sm_nbr_name(d); if (n && n[0]) return n;
+  RNS::Bytes ad = RNS::Identity::recall_app_data(d); const uint8_t* p = ad.data(); size_t len = ad.size();
+  if (len > 2 && (p[0] & 0xf0) == 0x90) {                                  // fixarray: LXMF [name, ...]
+    p++; len--;
+    if ((p[0] & 0xe0) == 0xa0) { size_t l = p[0] & 0x1f; p++; len--; if (l < len) len = l; }           // fixstr
+    else if ((p[0] == 0xc4 || p[0] == 0xd9) && len > 1) { size_t l = p[1]; p += 2; len -= 2; if (l < len) len = l; }   // bin8 / str8
+    else return nullptr;
   }
+  size_t l = len < 16 ? len : 16;
+  while (l > 0 && l < len && (p[l] & 0xc0) == 0x80) l--;                   // don't cut a UTF-8 character in half
+  if (!l) return nullptr;
+  for (size_t k = 0; k < l; k++) if (p[k] < 0x20 || p[k] == '`') return nullptr;
+  memcpy(buf, p, l); buf[l] = 0; return buf;
+}
+// An identified visitor's name: their LXMF display name, else their NomadNet node name.
+static const char* sm_ident_name(const RNS::Bytes& id, char* buf) {
+  if (id.size() != 16) return nullptr;
+  for (auto& a : {std::make_pair("lxmf", "delivery"), std::make_pair("nomadnetwork", "node")})
+    if (const char* n = sm_dest_name(sm_dest_of(a.first, a.second, id), buf)) return n;
+  return nullptr;
+}
+static void P_relay_name(const RNS::Bytes& t) {
+  char buf[17]; const char* name = sm_dest_name(sm_dest_of("nomadnetwork", "node", t), buf);
   std::string h = t.toHex(); h.resize(8);
   if (name && name[0]) P("%s " DIM("%s"), name, h.c_str()); else P("%s", h.c_str());
 }
@@ -1778,7 +1798,7 @@ static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, con
 static void api_reply(const char* path) {
   if (!sm.api) { P("{\"error\":\"api disabled\"}"); return; }
   const char* e = path + 4; if (*e == '/') e++;
-  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"all\"" SM_API_ENV_NAME SM_API_HIST_NAME "]}"); return; }
+  if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"links\",\"all\"" SM_API_ENV_NAME SM_API_HIST_NAME "]}"); return; }
   if (!strcmp(e, "bat")) { P("{"); J_bat(); P("}"); return; }
   if (!strcmp(e, "up")) { P("{"); J_up(); P("}"); return; }
   if (!strcmp(e, "net")) { P("{"); J_net(); P("}"); return; }
@@ -1805,8 +1825,8 @@ static void api_reply(const char* path) {
     double la = sm.lat, lo = sm.lon; if (sm.map_coarse) { la = std::round(la * 100) / 100; lo = std::round(lo * 100) / 100; }
     P("{\"lat\":%.5f,\"lon\":%.5f,\"height\":%d}", la, lo, (int)sm.height); return;
   }
-  bool paths = !strcmp(e, "paths"), nbrs = !strcmp(e, "nbrs");
-  if (!paths && !nbrs) { P("{\"error\":\"unknown endpoint\",\"see\":\"/api\"}"); return; }
+  bool paths = !strcmp(e, "paths"), nbrs = !strcmp(e, "nbrs"), links = !strcmp(e, "links");
+  if (!paths && !nbrs && !links) { P("{\"error\":\"unknown endpoint\",\"see\":\"/api\"}"); return; }
   SmApiCtx c{!strcmp(Q("s"), "1"), atoi(Q("o")), Qhas("n") ? atoi(Q("n")) : 5, 0, 0, false, RNS::Utilities::OS::time()};
   if (c.o < 0) c.o = 0;
   if (c.n < 1) c.n = 1;
@@ -1814,6 +1834,48 @@ static void api_reply(const char* path) {
   if (paths) {
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"dest\",\"hops\",\"age_s\",\"via\"],\"rows\":[", (unsigned)RNS::Transport::new_path_table().size(), c.o);
     sm_walk_paths(sm_api_path_row, &c);
+  } else if (links) {
+    // Who holds the open links: longest silent first, since those are the
+    // ones sm_links_watchdog() / the pool cap will close next. st: p(ending)
+    // h(andshake) a(ctive) s(tale) c(losed); in_s = seconds since anything
+    // was received on it; hops/rssi from the last packet seen on it (null
+    // once it has dropped out of sm_ls); who = the visitor's identity if it
+    // identified itself, else null; name/via: see below.
+    std::vector<std::pair<double, RNS::Link>> ls;   // silence taken once, so the sort sees fixed keys
+    for (const auto& ref : RNS::Transport::active_links()) { RNS::Link l = ref; ls.emplace_back(l.no_inbound_for(), l); }
+    std::sort(ls.begin(), ls.end(), [](const std::pair<double, RNS::Link>& a, const std::pair<double, RNS::Link>& b) { return a.first > b.first; });
+    P("{\"total\":%u,\"o\":%d,\"cols\":[\"link\",\"st\",\"age_s\",\"in_s\",\"hops\",\"rssi\",\"who\",\"name\",\"via\"],\"rows\":[", (unsigned)ls.size(), c.o);
+    for (size_t i = c.o; i < ls.size(); i++) {
+      if (c.rows >= c.n) { c.more = true; break; }
+      RNS::Link& l = ls[i].second;
+      std::string id = l.link_id().toHex(); if (c.shrt) id.resize(8);
+      const RNS::Identity& ri = l.get_remote_identity();
+      RNS::Bytes rid = ri ? ri.hash() : RNS::Bytes{};
+      std::string who = rid.toHex(); if (c.shrt && who.size() > 8) who.resize(8);
+      const SmLinkSeen* seen = sm_link_find(l.link_id());
+      char hops[6] = "null", rssi[8] = "null";
+      if (seen) { snprintf(hops, sizeof hops, "%u", seen->hops); if (seen->rssi) snprintf(rssi, sizeof rssi, "%d", seen->rssi); }
+      // name: the visitor's announced name (identified visitors only); via: the
+      // repeater that delivers a 2+ hop link, as on the Admin page ("?" = guessed by signal)
+      char nb[17], vb[17], name[24] = "null", via[28] = "null";
+      if (const char* n = sm_ident_name(rid, nb)) { char t[17]; strcpy(t, n); J_clean(t); snprintf(name, sizeof name, "\"%s\"", t); }
+      if (seen && seen->hops > 1) {
+        bool guessed; RNS::Bytes t = sm_last_hop(rid, seen->rssi, seen->rssi != 0, guessed);
+        if (t) {
+          const char* n = sm_dest_name(sm_dest_of("nomadnetwork", "node", t), vb); char v[17];
+          if (n) strcpy(v, n); else { std::string h = t.toHex(); h.resize(8); strcpy(v, h.c_str()); }
+          J_clean(v); snprintf(via, sizeof via, "\"%s%s\"", v, guessed ? "?" : "");
+        }
+      }
+      static const char ST[] = "phasc";
+      uint8_t st = l.status(); double age = l.request_time() > 0 ? c.now - l.request_time() : -1;
+      size_t before = sm_pn;
+      std::string whoj = who.empty() ? std::string("null") : "\"" + who + "\"";
+      P("%s[\"%s\",\"%c\",%ld,%ld,%s,%s,%s,%s,%s]", c.rows ? "," : "", id.c_str(),
+        st < 5 ? ST[st] : '?', (long)age, (long)ls[i].first, hops, rssi, whoj.c_str(), name, via);
+      if (sm_pn > SM_HOME_BUDGET - 16) { pb_cut(before); c.more = true; break; }
+      c.rows++;
+    }
   } else {
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"dest\",\"age_s\",\"name\"],\"rows\":[", (unsigned)sm_nbrs.size(), c.o);
     for (size_t i = c.o; i < sm_nbrs.size(); i++) {
@@ -1887,7 +1949,7 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
 }
 
 static const char SM_PAGE_IDS[] = "rblascdnhgfwykqpjeioxmu" SM_IDS_ENV SM_IDS_HIST;
-static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs" SM_API_ENV SM_API_HIST};
+static const char* SM_API_PATHS[] = {"/api", "/api/bat", "/api/up", "/api/radio", "/api/net", "/api/sys", "/api/health", "/api/pos", "/api/all", "/api/paths", "/api/nbrs", "/api/links" SM_API_ENV SM_API_HIST};
 
 void sm_register(RNS::Destination& dest) {
   dest.register_request_handler("/page/index.mu", sm_serve, RNS::Type::Destination::ALLOW_ALL);
