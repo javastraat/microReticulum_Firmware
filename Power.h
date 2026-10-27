@@ -354,6 +354,31 @@ void measure_battery() {
         }
       }
 
+      #if BOARD_MODEL == BOARD_SEEED_P1
+        // No charge-status pin on the P1, and its 4x18650 pack barely moves at
+        // night, so the generic "not dropping = charging" rule above reads
+        // "charging" in the dark. Here charging needs a clear rise: the
+        // averaged voltage against the oldest of 7 snapshots taken every
+        // 10 min (an hour back -- a slow solar charge is only a few mV per
+        // 10 min, below the noise). +15 mV starts "charging" if it isn't
+        // falling right now; it ends as soon as the voltage is 8 mV under the
+        // snapshot 10-20 min back (sunset shows within ~20 min, not an hour)
+        // or the hour's rise falls under +5 mV. Otherwise discharging; 100 %
+        // stays charged.
+        {
+          static float p1_v[7]; static uint8_t p1_n = 0; static uint32_t p1_at = 0; static bool p1_rising = false;
+          uint32_t now = millis();
+          if (p1_n == 0 || now - p1_at >= 600000UL) {
+            p1_at = now;
+            if (p1_n < 7) p1_v[p1_n++] = battery_voltage;
+            else { memmove(p1_v, p1_v + 1, 6 * sizeof(float)); p1_v[6] = battery_voltage; }
+          }
+          float rise = battery_voltage - p1_v[0], recent = battery_voltage - p1_v[p1_n >= 2 ? p1_n - 2 : 0];
+          p1_rising = p1_rising ? rise > 0.005 && recent > -0.008 : rise >= 0.015 && recent >= 0;
+          battery_state = battery_percent >= 100.0 ? BATTERY_STATE_CHARGED : p1_rising ? BATTERY_STATE_CHARGING : BATTERY_STATE_DISCHARGING;
+        }
+      #endif
+
       #if MCU_VARIANT == MCU_NRF52
         if (bt_state != BT_STATE_OFF) { blebas.write(battery_percent); }
       #endif

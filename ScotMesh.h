@@ -874,9 +874,9 @@ static void sm_lxmf_loop(uint32_t now, uint64_t up) {
   static uint32_t last_bat = 0; static bool low_sent = false;
   if (now - last_bat > 60000UL && battery_voltage > 0.1) {
     last_bat = now; int warn = sm.pwr_below + 10;   // ahead of the Power page's own action
-    if (!low_sent && !sm_charging() && sm_pct() < warn) {
-      low_sent = true; char b[96]; snprintf(b, sizeof b, "%s battery low: %d%% %.2fV, not charging", nomadnet_name, sm_pct(), battery_voltage); sm_alert(b);
-    } else if (low_sent && (sm_charging() || sm_pct() >= warn + 10)) low_sent = false;
+    if (!low_sent && sm_pct() < warn) {   // level only, as the power actions below (see there)
+      low_sent = true; char b[96]; snprintf(b, sizeof b, "%s battery low: %d%% %.2fV%s", nomadnet_name, sm_pct(), battery_voltage, sm_charging() ? ", charging" : ""); sm_alert(b);
+    } else if (low_sent && sm_pct() >= warn + 10) low_sent = false;
   }
   static uint32_t last_wall = 0;
   if (now - last_wall > 3600000UL) { last_wall = now; sm_wall_save(); }
@@ -2134,8 +2134,13 @@ void sm_loop() {
   static uint32_t last_pwr = 0;
   if (now - last_pwr > 60000UL && battery_voltage > 0.1) {
     last_pwr = now;
-    bool low = !sm_charging() && battery_percent < sm.pwr_below, recovered = sm_charging() || battery_percent >= sm.pwr_below + 10;
-    bool undervolt = sm.pwr_lock && !sm_charging() && battery_voltage < 3.3, voltok = battery_voltage >= 3.5 || sm_charging();
+    // Battery level only, never "charging": boards without a charge-status
+    // pin guess it from the voltage trend, and a big pack that barely moves
+    // at night reads "charging" in the dark -- which kept every action here
+    // from firing. A low battery that is really charging just stays in the
+    // reduced state until it's back above the threshold + 10 %.
+    bool low = battery_percent < sm.pwr_below, recovered = battery_percent >= sm.pwr_below + 10;
+    bool undervolt = sm.pwr_lock && battery_voltage < 3.3, voltok = battery_voltage >= 3.5;
     if ((low && sm.pwr_act == 2) || undervolt) { if (!sm_power_sleep) { sm_power_sleep = true; stopRadio(); NOTICE("[power] low battery, radio off"); } }
     else if (sm_power_sleep && recovered && voltok) { sm_power_sleep = false; startRadio(); NOTICE("[power] battery recovered, radio on"); }
     if (low && sm.pwr_act == 1 && !sm_power_limited && lora_txp > 10) { sm_saved_txp = lora_txp; lora_txp = 10; setTXPower(); sm_power_limited = true; NOTICE("[power] low battery, TX power lowered"); }
