@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- Heltec V3 and V4: the Lights setting (off / off after 10 min) now switches off the onboard LED too. It was only honoured on the Solar Node P1, so on a Heltec the LED kept blinking whatever was chosen.
 - API paging (`o`, `n`, `s` on `/api/paths`, `/api/nbrs`, `/api/links`, `/api/hist`) now also works from a NomadNet browser: link variables (`` `/api/links`s=1|n=4 ``, sent as `var_s`/`var_n`) were ignored, only raw request-data keys from scripts counted. The docs no longer suggest a `?s=1` query string, which NomadNet treats as part of the path, so the request timed out.
 - nRF52 boards: NaN checks work again. The Adafruit core appends `-Ofast` after our `-Os`, and its fast-math folded every `isnan()` to false, so missing readings showed as "nan" (e.g. `nanhPa` / `nan%` on the Telemetry page per-chip rows with an ENV III). Built with `-fno-finite-math-only` now.
 - Solar Node P1: the radio is reset before it is probed at boot. The P1 bootloader (0.9.2-OTAFIX2.2-BP1.3) can leave the SX1262 in reset, giving "No radio module found", `hw_ready 0` and a TNC config that never loads (the node fell back to host-controlled after a restart). A failed probe now logs the sync-word bytes read on nRF52 too.
