@@ -131,8 +131,12 @@ float pmu_temperature = PMU_TEMP_MIN-1;
   float bat_delay_v = 0;
   float bat_state_change_v = 0;
 #elif BOARD_MODEL == BOARD_HELTEC32_V4
-  #define BAT_V_MIN       3.05
-  #define BAT_V_MAX       4.0
+  // Same straight line as the P1 (3.15 V = 0 % .. 4.15 V = 100 %), so a
+  // solar 4x18650 repeater reads the same on both and the Power page
+  // threshold means the same voltage. Was 3.05 .. 4.0 V, set to match the
+  // old ADC scale that read ~4.5 % low (see measure_battery()).
+  #define BAT_V_MIN       3.15
+  #define BAT_V_MAX       4.15
   #define BAT_V_CHG       4.48
   #define BAT_V_FLOAT     4.33
   #define BAT_SAMPLES     7
@@ -266,7 +270,10 @@ void measure_battery() {
     #if BOARD_MODEL == BOARD_HELTEC32_V3
       float battery_measurement = (float)(analogRead(pin_vbat)) * 0.0041;
     #elif BOARD_MODEL == BOARD_HELTEC32_V4
-      float battery_measurement = (float)(analogRead(pin_vbat)) * 0.00418;
+      // MeshCore's V4 scale (ADC_MULTIPLIER 5.42 x 3.3 V / 4096). Was 0.00418,
+      // which reads ~4.5 % low: a full 4.20 V pack showed ~4.02 V, which is
+      // why upstream's BAT_V_MAX sat at 4.0 V.
+      float battery_measurement = (float)(analogRead(pin_vbat)) * 0.004367;
     #elif BOARD_MODEL == BOARD_HELTEC_TRACKER_V2
       // The board pin map specifies VBAT = Vbat_Read * 4.9.
       float battery_measurement = (float)(analogRead(pin_vbat)) / 4095.0 * 3.3 * 4.9;
@@ -354,8 +361,9 @@ void measure_battery() {
         }
       }
 
-      #if BOARD_MODEL == BOARD_SEEED_P1
-        // No charge-status pin on the P1, and its 4x18650 pack barely moves at
+      #if BOARD_MODEL == BOARD_SEEED_P1 || BOARD_MODEL == BOARD_HELTEC32_V4
+        // No charge-status pin on the P1 or the Heltec V4, and a solar 4x18650
+        // pack (P1 built in, the TechInc V4 on a 12 W panel) barely moves at
         // night, so the generic "not dropping = charging" rule above reads
         // "charging" in the dark. Here charging needs a clear rise: the
         // averaged voltage against the oldest of 7 snapshots taken every
