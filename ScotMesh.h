@@ -1866,7 +1866,7 @@ static bool sm_api_path_row(const RNS::Bytes& k, uint8_t hops, double heard, con
   if (sm_pn > SM_HOME_BUDGET - 16) { pb_cut(before); c.more = true; return false; }
   c.rows++; return true;
 }
-static void api_reply(const char* path) {
+static void api_reply(const char* path, const RNS::Bytes& rid) {
   const char* e = path + 4; if (*e == '/') e++;
   if (!*e) { P("{\"v\":1,\"api\":[\"bat\",\"up\",\"radio\",\"net\",\"sys\",\"health\",\"pos\",\"paths\",\"nbrs\",\"links\",\"all\"" SM_API_ENV_NAME SM_API_HIST_NAME "]}"); return; }
   if (!strcmp(e, "bat")) { P("{"); J_bat(); P("}"); return; }
@@ -1905,12 +1905,17 @@ static void api_reply(const char* path) {
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"dest\",\"hops\",\"age_s\",\"via\"],\"rows\":[", (unsigned)RNS::Transport::new_path_table().size(), c.o);
     sm_walk_paths(sm_api_path_row, &c);
   } else if (links) {
-    // cols as SmLinkRow; who/name/via null where unknown
+    // cols as SmLinkRow; who/name/via null where unknown. who/name come from an
+    // identify sent only to this node, so they are admin only, like the Visitors
+    // page. via is hidden too: it ties a live session to the area around one
+    // repeater (privacy default; can be made public if wanted).
+    bool admin = sm_is_admin(rid);
     auto ls = sm_links_by_silence();
     P("{\"total\":%u,\"o\":%d,\"cols\":[\"link\",\"st\",\"age_s\",\"in_s\",\"hops\",\"rssi\",\"who\",\"name\",\"via\"],\"rows\":[", (unsigned)ls.size(), c.o);
     for (size_t i = c.o; i < ls.size(); i++) {
       if (c.rows >= c.n) { c.more = true; break; }
       SmLinkRow r; sm_link_row(ls[i].second, ls[i].first, c.now, r);
+      if (!admin) { r.rid = RNS::Bytes{}; r.name[0] = 0; r.via[0] = 0; }
       std::string id = ls[i].second.link_id().toHex(); if (c.shrt) id.resize(8);
       std::string who = r.rid.toHex(); if (c.shrt && who.size() > 8) who.resize(8);
       auto js = [](const char* v) { if (!*v) return std::string("null"); char t[20]; strncpy(t, v, 19); t[19] = 0; J_clean(t); return "\"" + std::string(t) + "\""; };
@@ -1950,7 +1955,7 @@ RNS::Bytes sm_serve(const RNS::Bytes& path_b, const RNS::Bytes& data, const RNS:
   bool api = !strncmp(path, "/api", 4);
   pb_reset();
   if (RNS::Utilities::Memory::heap_available() < SM_RAM_FLOOR) P(api ? "{\"error\":\"busy\"}" : "#!c=0\n>Busy\nLow on memory, try again later.");
-  else if (sm_parse(data), api) api_reply(path);
+  else if (sm_parse(data), api) api_reply(path, rid);
   else {
     char pg = !strcmp(path, "/page/index.mu") ? 'I' : (strlen(path) == 10 && !strcmp(path + 7, ".mu")) ? path[6] : '?';
     if (pg == 'I') pg_home(rid, link_id);
