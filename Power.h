@@ -258,8 +258,18 @@ void measure_temperature() {
   #endif
 }
 
+// Boards whose battery is read through an ADC in measure_battery() -- the ones
+// battery_cal applies to (PMU boards report the voltage themselves).
+#define BAT_ADC_BOARD (BOARD_MODEL == BOARD_RNODE_NG_21 || BOARD_MODEL == BOARD_LORA32_V2_1 || BOARD_MODEL == BOARD_HELTEC32_V3 || BOARD_MODEL == BOARD_HELTEC32_V4 || BOARD_MODEL == BOARD_HELTEC_TRACKER_V2 || BOARD_MODEL == BOARD_TDECK || BOARD_MODEL == BOARD_T3S3 || BOARD_MODEL == BOARD_HELTEC_T114 || BOARD_MODEL == BOARD_TECHO || BOARD_MODEL == BOARD_RAK4631 || BOARD_MODEL == BOARD_RAK3401 || BOARD_MODEL == BOARD_SEEED_P1)
+
+#if BOARD_MODEL == BOARD_SEEED_P1 || BOARD_MODEL == BOARD_HELTEC32_V4
+  // Charge-detection history (see measure_battery()); file scope so a new
+  // calibration can restart it instead of reading its own step as a rise.
+  static float p1_v[7]; static uint8_t p1_n = 0; static uint32_t p1_at = 0; static bool p1_rising = false;
+#endif
+
 void measure_battery() {
-  #if BOARD_MODEL == BOARD_RNODE_NG_21 || BOARD_MODEL == BOARD_LORA32_V2_1 || BOARD_MODEL == BOARD_HELTEC32_V3 || BOARD_MODEL == BOARD_HELTEC32_V4 || BOARD_MODEL == BOARD_HELTEC_TRACKER_V2 || BOARD_MODEL == BOARD_TDECK || BOARD_MODEL == BOARD_T3S3 || BOARD_MODEL == BOARD_HELTEC_T114 || BOARD_MODEL == BOARD_TECHO || BOARD_MODEL == BOARD_RAK4631 || BOARD_MODEL == BOARD_RAK3401 || BOARD_MODEL == BOARD_SEEED_P1
+  #if BAT_ADC_BOARD
     battery_installed = true;
     #if BOARD_MODEL == BOARD_HELTEC32_V3 || BOARD_MODEL == BOARD_HELTEC32_V4 || BOARD_MODEL == BOARD_HELTEC_TRACKER_V2
       battery_indeterminate = false;
@@ -292,6 +302,7 @@ void measure_battery() {
       float battery_measurement = (float)(analogRead(pin_vbat)) / 4095.0*7.26;
     #endif
 
+    battery_measurement *= battery_cal;   // per-node calibration from a meter reading (Power page), 1.0 by default
     bat_v_samples[bat_samples_count%BAT_SAMPLES] = battery_measurement;
     bat_p_samples[bat_samples_count%BAT_SAMPLES] = ((battery_measurement-BAT_V_MIN) / (BAT_V_MAX-BAT_V_MIN))*100.0;
     
@@ -374,7 +385,6 @@ void measure_battery() {
         // or the hour's rise falls under +5 mV. Otherwise discharging; 100 %
         // stays charged.
         {
-          static float p1_v[7]; static uint8_t p1_n = 0; static uint32_t p1_at = 0; static bool p1_rising = false;
           uint32_t now = millis();
           if (p1_n == 0 || now - p1_at >= 600000UL) {
             p1_at = now;
@@ -491,6 +501,27 @@ void measure_battery() {
       if (pmu_temp_sensor_ready) { kiss_indicate_temperature(); }
     }
   }
+}
+
+// New calibration factor: rescale what's already averaged so the reading moves
+// at once (no slow walk across BAT_SAMPLES), and restart the P1/V4 charge
+// history so the step isn't taken for a charging rise.
+void battery_set_cal(float cal) {
+  #if BAT_ADC_BOARD
+    float r = cal / battery_cal;
+    for (uint8_t bi = 0; bi < BAT_SAMPLES; bi++) {
+      bat_v_samples[bi] *= r;
+      bat_p_samples[bi] = ((bat_v_samples[bi]-BAT_V_MIN) / (BAT_V_MAX-BAT_V_MIN))*100.0;
+    }
+    battery_voltage *= r; bat_delay_v *= r; bat_state_change_v *= r;
+    battery_percent = ((battery_voltage-BAT_V_MIN) / (BAT_V_MAX-BAT_V_MIN))*100.0;
+    if (battery_percent > 100.0) battery_percent = 100.0;
+    if (battery_percent < 0.0) battery_percent = 0.0;
+    #if BOARD_MODEL == BOARD_SEEED_P1 || BOARD_MODEL == BOARD_HELTEC32_V4
+      p1_n = 0; p1_rising = false;
+    #endif
+  #endif
+  battery_cal = cal;
 }
 
 void update_pmu() {

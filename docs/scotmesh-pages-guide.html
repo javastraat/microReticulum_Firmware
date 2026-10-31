@@ -40,10 +40,10 @@
 <summary><kbd>I</kbd> <code>/page/index.mu</code> &mdash; Home</summary>
 <p>The node's landing page &mdash; whatever the operator has chosen to make public.</p>
 <ul>
-  <li>Node name, battery gauge (10-block bar, %, voltage, charge arrow)</li>
-  <li>Uptime, path count (links to Routes), radio freq/SF, live airtime %, operator note</li>
+  <li>Node name, battery gauge (10-block bar, %, voltage, ▲ charging / ● full / ▼ on battery)</li>
+  <li>Operator note under the name; then uptime, path count (links to Routes), radio freq/SF, live airtime %</li>
   <li>"Admin" link if you're already registered, or "Register" if password sign-up is on</li>
-  <li>Verified-identity line, firmware + board footer</li>
+  <li>Verified-identity line (only if you identified), optional local flag/footer line, ScotMesh credit, firmware + board footer</li>
 </ul>
 <p><mark>Visitor view is configurable</mark> on the Settings &rarr; Home page.</p>
 </details>
@@ -105,7 +105,7 @@
 <details>
 <summary><kbd>h</kbd> <code>/page/h.mu</code> &mdash; Home page</summary>
 <ul>
-  <li>Checkboxes for what a visitor sees: battery, uptime, radio, paths, airtime, operator, routes-link</li>
+  <li>Checkboxes for what a visitor sees: battery, uptime, radio, paths, airtime, operator, routes-link, visitor's link, ScotMesh credit, firmware &amp; board (admins always see everything; <code>*</code> marks rows hidden from visitors)</li>
   <li>"Preview" link &mdash; see the visitor view live</li>
 </ul>
 </details>
@@ -143,6 +143,7 @@
   <li>Battery-% threshold (5&ndash;60%), action below it: lower TX to 10&nbsp;dBm, radio off until charged, or nothing</li>
   <li>Separate hard cutoff: radio off below 3.3&nbsp;V</li>
   <li>Live flag if a limit is currently in effect</li>
+  <li>Battery calibration (boards that read the battery through an ADC, e.g. Solar Node P1, Heltec V3/V4, RAK4631): shows what the node reads; measure the pack with a multimeter, type that voltage into Meter and press Calibrate, at the same moment. The node stores meter &divide; its own reading (within &plusmn;10&nbsp;%) and applies it to every reading from then on: voltage, percentage, charging, alerts, power thresholds. Reset goes back to the board's built-in scale. Survives updates and a full reset (it belongs to the hardware)</li>
 </ul>
 </details>
 

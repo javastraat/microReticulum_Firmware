@@ -153,6 +153,7 @@ extern RNS::Interface lora_interface;
 // Persisted settings (own small file; provisioning keeps name/role/admins)
 // ---------------------------------------------------------------------------
 enum : uint8_t { SMH_BAT = 1, SMH_UP = 2, SMH_RADIO = 4, SMH_PATHS = 8, SMH_AIR = 16, SMH_OP = 32, SMH_ROUTES = 64, SMH_NOLINK = 128 };   // NOLINK is inverted: set hides the line, so existing configs show it
+enum : uint8_t { SMH2_NOCREDIT = 1, SMH2_NOVER = 2 };   // home2, all inverted the same way: set hides the footer line
 struct SmConfig {
   uint32_t magic = 0x31434D53;           // "SMC1"
   uint8_t  home = SMH_BAT | SMH_UP | SMH_PATHS | SMH_OP | SMH_ROUTES;
@@ -174,7 +175,7 @@ struct SmConfig {
   uint8_t  upd_wifi = 0;                 // ESP32: next boot opens the WiFi update window instead of the mesh
   char     upd_pw[9] = "";               // its one-time WiFi password
   uint8_t  wall[4] = {0};               // last known wall clock, for LXMF message times (SM_LXMF)
-  uint8_t  reserved[1] = {0};
+  uint8_t  home2 = 0;                    // SMH2_*: footer lines hidden from visitors (was reserved[1], same size)
 };
 static SmConfig sm;
 static const char* SM_CFG_PATH = "/scotmesh.cfg";
@@ -187,6 +188,19 @@ static void sm_save() { RNS::Utilities::OS::write_file(SM_CFG_PATH, RNS::Bytes((
 struct SmLocal { char cc[3]; char text[25]; };
 static SmLocal sm_loc{};
 static void sm_loc_save() { RNS::Utilities::OS::write_file(SM_LOC_PATH, RNS::Bytes((const uint8_t*)&sm_loc, sizeof(sm_loc))); }
+// Battery calibration (Power page): meter reading / node reading, applied to
+// every ADC battery sample (battery_cal, Power.h). Own file -- SmConfig has no
+// room left -- and kept on a full reset: it belongs to the hardware, not the
+// settings. No file = 1.0 = the board's built-in scale.
+#if HAS_PMU == true && BAT_ADC_BOARD
+  #define SM_BAT_CAL 1
+  static const char* SM_CAL_PATH = "/scotmesh.cal";
+  static void sm_cal_load() {
+    RNS::Bytes b; float c;
+    if (!RNS::Utilities::OS::file_exists(SM_CAL_PATH) || RNS::Utilities::OS::read_file(SM_CAL_PATH, b) != sizeof(c)) return;
+    memcpy(&c, b.data(), sizeof(c)); if (c >= 0.9f && c <= 1.1f) battery_set_cal(c);
+  }
+#endif
 static void sm_loc_load() {
   RNS::Bytes b;
   if (RNS::Utilities::OS::file_exists(SM_LOC_PATH) && RNS::Utilities::OS::read_file(SM_LOC_PATH, b) == sizeof(sm_loc)) {
@@ -682,7 +696,8 @@ static void P_battery() {
   int p = sm_pct(), f = (p + 5) / 10;
   P("`F%s", p < 25 ? "f55" : p < 50 ? "da3" : "2c5");
   for (int i = 0; i < 10; i++) P(i < f ? "\xE2\x96\x88" : "\xE2\x96\x91");
-  P("`f %d%% %.2fV %s", p, battery_voltage, sm_charging() ? "`F2c5\xE2\x96\xB2`f" : "`Fda3\xE2\x96\xBC`f");
+  // ▲ charging, ● full (charged), ▼ on battery -- all from the Geometric Shapes block, so they render alike
+  P("`f %d%% %.2fV %s", p, battery_voltage, battery_state == BATTERY_STATE_CHARGED ? "`F2c5\xE2\x97\x8F`f" : sm_charging() ? "`F2c5\xE2\x96\xB2`f" : "`Fda3\xE2\x96\xBC`f");
 }
 
 #ifdef SM_LXMF
@@ -926,14 +941,15 @@ static void pg_home(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
   uint8_t dropped = 0;
   for (int pass = 0; pass <= 5; pass++) {
     auto show = [&](uint8_t bit) { return ((sm.home & bit) || admin) && !(dropped & bit); };
-    auto star = [&](uint8_t bit) { if (admin && !(sm.home & bit)) P("*"); };
+    auto star = [&](uint8_t bit) { if (admin) P((sm.home & bit) ? " " : "*"); };   // admin: * = hidden from visitors, space keeps the rows aligned
     pb_reset(); P("#!c=0\n");
     if (preview) { P("`Bda3`F000 Visitor view `b`f "); PL("back", 'h'); P("\n"); }
     P(">%s\n", nomadnet_name);
-    if (show(SMH_BAT) || show(SMH_UP) || show(SMH_PATHS) || show(SMH_RADIO) || show(SMH_AIR) || (show(SMH_OP) && sm.op[0])) P(">>Status\n");
+    if (show(SMH_OP) && sm.op[0]) { if (admin && !(sm.home & SMH_OP)) P("*"); P(DIM("Op") " %s\n", sm.op); }   // who runs it: under the name, not a status row (no alignment space: nothing to line up with)
+    if (show(SMH_BAT) || show(SMH_UP) || show(SMH_PATHS) || show(SMH_RADIO) || show(SMH_AIR)) P("\n>>Status\n");   // blank line: air between name and status
     if (show(SMH_BAT)) { star(SMH_BAT); P_battery(); P("\n"); }
     if (show(SMH_UP) || show(SMH_PATHS)) {
-      star(show(SMH_UP) ? SMH_UP : SMH_PATHS); P(DIM("Up") " ");
+      star(show(SMH_UP) ? SMH_UP : SMH_PATHS); P(DIM("Up") "    ");   // padded to "Radio "
       if (show(SMH_UP)) P("%s", sm_up());
       if (show(SMH_PATHS)) {
         char l[20]; snprintf(l, sizeof l, "%u routes", (unsigned)RNS::Transport::new_path_table().size());
@@ -948,15 +964,20 @@ static void pg_home(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
       if (show(SMH_AIR)) P("%s%.1f%% air", show(SMH_RADIO) ? ", " : "", airtime * 100);
       P("\n");
     }
-    if (show(SMH_OP) && sm.op[0]) { star(SMH_OP); P(DIM("Op") " %s\n", sm.op); }
     P("<\n");
     if (admin) { PL("Admin", 'a'); P("\n"); }
     else if (rid.size() && sm.pw_on && !preview) { PL("Register", 'l'); P("\n"); }
-    if (!preview) P_verified(rid, admin);
+    if (!preview && rid.size()) P_verified(rid, admin);   // "Not identified" told a visitor nothing they could act on
     if (link && !admin && !(sm.home & SMH_NOLINK) && !(dropped & SMH_NOLINK)) P_link(link);   // admins get it on the Admin page
-    P("-\n`c");                                      // `c toggles and carries over lines (Micron): once for the whole block
-    if (sm_loc.cc[0] || sm_loc.text[0]) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("%s%s%s\n", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text); }
-    P("%s ScotMesh microReticulum\n%s " MIDDOT " %s", SM_FLAG, SCOTMESH_FW_TAG, BOARD_SHORT_NAME);   // last on the page: no `a (it would un-centre this line)
+    // Footer: local line, ScotMesh credit, firmware + board. The last two can be
+    // hidden from visitors (Home page settings); admins always see them.
+    bool loc = sm_loc.cc[0] || sm_loc.text[0], credit = admin || !(sm.home2 & SMH2_NOCREDIT), ver = admin || !(sm.home2 & SMH2_NOVER);
+    if (loc || credit || ver) {
+      P("-\n`c");                                    // `c toggles and carries over lines (Micron): once for the whole block
+      if (loc) { char fl[9]; sm_flag_of(sm_loc.cc, fl); P("%s%s%s%s", fl, fl[0] && sm_loc.text[0] ? " " : "", sm_loc.text, credit || ver ? "\n" : ""); }
+      if (credit) P("%s ScotMesh microReticulum%s", SM_FLAG, ver ? "\n" : "");
+      if (ver) P("%s " MIDDOT " %s", SCOTMESH_FW_TAG, BOARD_SHORT_NAME);   // last on the page: no `a (it would un-centre this line)
+    }
     if (sm_pn <= SM_HOME_BUDGET || pass == 5) break;
     dropped |= order[pass];
   }
@@ -1260,9 +1281,14 @@ static void pg_name(const RNS::Bytes& rid) {
 static void pg_homelayout(const RNS::Bytes& rid) {
   static const struct { uint8_t bit; const char* k; const char* l; } K[] = {{SMH_BAT, "b", "Battery"}, {SMH_UP, "u", "Uptime"}, {SMH_RADIO, "r", "Radio"}, {SMH_PATHS, "d", "Paths"}, {SMH_AIR, "x", "Airtime"}, {SMH_OP, "o", "Operator"}, {SMH_ROUTES, "p", "Routes pages"}, {SMH_NOLINK, "lk", "Visitor's link (hops, signal)"}};
   const char* msg = nullptr;
-  if (Vis("a", "s")) { uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1") != (k.bit == SMH_NOLINK)) h |= k.bit; sm.home = h; sm_save(); sm_change(rid, "home page layout"); msg = "Saved."; }
+  if (Vis("a", "s")) {
+    uint8_t h = 0; for (auto& k : K) if (Fis(k.k, "1") != (k.bit == SMH_NOLINK)) h |= k.bit; sm.home = h;
+    sm.home2 = (sm.home2 & ~(SMH2_NOCREDIT | SMH2_NOVER)) | (Fis("cr", "1") ? 0 : SMH2_NOCREDIT) | (Fis("fv", "1") ? 0 : SMH2_NOVER);
+    sm_save(); sm_change(rid, "home page layout"); msg = "Saved.";
+  }
   Ph("Home page"); Pmsg('o', msg); P(DIM("Ticked = public") "\n");
   for (auto& k : K) { PC(k.k, !(sm.home & k.bit) == (k.bit == SMH_NOLINK)); P(" %s\n", k.l); }
+  PC("cr", !(sm.home2 & SMH2_NOCREDIT)); P(" ScotMesh credit\n"); PC("fv", !(sm.home2 & SMH2_NOVER)); P(" Firmware & board\n");
   PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK();
 }
 
@@ -1341,12 +1367,30 @@ static void pg_power(const RNS::Bytes& rid) {
     if (n < 5 || n > 60) { msg = "Threshold: 5-60%."; kind = 'b'; }
     else { sm.pwr_below = n; sm.pwr_act = Fis("la", "0") ? 0 : Fis("la", "2") ? 2 : 1; sm.pwr_lock = Fis("bl", "1"); sm_save(); sm_change(rid, "power settings"); msg = "Saved."; }
   }
+#ifdef SM_BAT_CAL
+  // Calibrate: the voltage a meter reads on the pack right now -> factor =
+  // meter / this node's reading (both at the same moment). Within 10 %, else
+  // it's a typo or the wrong probe point rather than ADC error.
+  if (Vis("a", "c")) {
+    float m = atof(Fv("mv")), c = battery_voltage > 1.0f ? battery_cal * m / battery_voltage : 0;
+    if (!(c >= 0.9f && c <= 1.1f)) { msg = battery_voltage > 1.0f ? "Meter more than 10% off the reading." : "No battery reading yet."; kind = 'b'; }
+    else { battery_set_cal(c); RNS::Utilities::OS::write_file(SM_CAL_PATH, RNS::Bytes((const uint8_t*)&c, sizeof(c))); sm_change(rid, "battery calibration"); msg = "Calibrated."; }
+  }
+  if (Vis("a", "cz")) { battery_set_cal(1.0f); RNS::Utilities::OS::remove_file(SM_CAL_PATH); sm_change(rid, "battery calibration reset"); msg = "Calibration reset."; }
+#endif
   char lb[4]; snprintf(lb, sizeof lb, "%u", sm.pwr_below);
   Ph("Power"); Pmsg(kind, msg); P("Below "); PF(2, "lb", lb); P("%% battery:\n");
   PR("la", "1", sm.pwr_act == 1); P(" Lower TX power to 10 dBm\n"); PR("la", "2", sm.pwr_act == 2); P(" Radio off until charged\n"); PR("la", "0", sm.pwr_act == 0); P(" Nothing\n");
   PC("bl", sm.pwr_lock); P(" Radio off below 3.3 V\n");
   if (sm_power_limited || sm_power_sleep) Pmsg('a', sm_power_sleep ? "Radio off now (low battery)" : "TX power lowered now");
-  PL("Save", 'y', "lb|la|bl|a=s"); P("  "); PBACK();
+  PL("Save", 'y', "lb|la|bl|a=s"); P("\n");
+#ifdef SM_BAT_CAL
+  P("\nReads %.2f V", battery_voltage); if (battery_cal != 1.0f) P(DIM(" x%.3f"), battery_cal);
+  P("\nMeter "); PF(5, "mv", ""); P(" V "); PL("Calibrate", 'y', "mv|a=c");
+  if (battery_cal != 1.0f) { P(" "); PL("Reset", 'y', "a=cz"); }
+  P("\n");
+#endif
+  PBACK();
 }
 
 static void pg_health() {
@@ -2027,6 +2071,9 @@ void sm_register(RNS::Destination& dest) {
 // Early boot: settings, start counter, reset reason.
 void sm_boot() {
   sm_load(); sm.reboots++; sm_save(); sm_loc_load();
+#ifdef SM_BAT_CAL
+  sm_cal_load();
+#endif
 #ifdef SM_LXMF
   sm_wall_boot();
 #endif

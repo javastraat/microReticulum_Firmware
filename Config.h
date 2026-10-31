@@ -224,6 +224,7 @@
     bool battery_ready = false;
     float battery_voltage = 0.0;
     float battery_percent = 0.0;
+    float battery_cal = 1.0;   // per-node ADC calibration (meter / reading), set from the Power page; 1.0 = the board's built-in scale
     uint8_t battery_state = 0x00;
     uint8_t display_intensity = 0xFF;
     uint8_t display_addr = 0xFF;
