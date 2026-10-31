@@ -1000,10 +1000,11 @@ static bool sm_route_row(const RNS::Bytes& k, uint8_t hops, double heard, const 
   if (c.seen++ < c.o) return true;
   if (c.rows >= c.n) { c.more = true; return false; }
   char age[8]; const char* name = sm_nbr_name(k);
-  std::string h = k.toHex(); if (c.shrt || (name && name[0])) h.resize(8);
+  std::string h = k.toHex(); if (c.shrt) h.resize(8);
   size_t before = sm_pn;
-  if (name && name[0]) P("%s %u %s %s\n", h.c_str(), hops, sm_age(c.now - heard, age), name);
-  else P("%s %u %s\n", h.c_str(), hops, sm_age(c.now - heard, age));
+  P("%-*s %4u %5s", c.shrt ? 8 : 32, h.c_str(), hops, sm_age(c.now - heard, age));   // padded to the header row's columns
+  if (name && name[0]) P("  %s", name);
+  P("\n");
   if (sm_pn > c.limit) { pb_cut(before); c.more = true; return false; }
   c.rows++; return true;
 }
@@ -1020,14 +1021,19 @@ static void pg_list(bool routes, const RNS::Bytes& rid) {
   int n = atoi(form ? Fv("n") : Vv("n")); if (n < 1 || n > 30) n = 10;
   int o = atoi(Vv("o")); if (o < 0) o = 0;
   size_t total = routes ? RNS::Transport::new_path_table().size() : sm_nbrs.size();
-  if (routes) P("#!c=0\n>Routes " DIM("%u " MIDDOT " hops " MIDDOT " heard " MIDDOT " name?") "\n", (unsigned)total);
-  else P("#!c=0\n>Neighbours " DIM("heard " MIDDOT " name") "\n");
+  // Title bar holds only the title; the column names go in a dim header row
+  // padded to the rows' widths, as on the Visitors page.
+  int w = shrt ? 8 : 32;
+  if (routes) P("#!c=0\n>Routes " MIDDOT " %u known\n`F888%-*s hops heard  name`f\n", (unsigned)total, w, "dest");
+  else P("#!c=0\n>Neighbours " MIDDOT " %u heard\n`F888%-*s heard  name`f\n", (unsigned)total, w, "node");
   SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0) - (admin ? 49 : 0))};   // room for the footer (+ back link, + Visitors and Device)
   if (routes) sm_walk_paths(sm_route_row, &c);
   else for (size_t i = o; i < sm_nbrs.size(); i++) {
     if (c.rows >= n) { c.more = true; break; }
-    char age[8]; std::string h = sm_nbrs[i].id.toHex(); if (shrt || sm_nbrs[i].name[0]) h.resize(8);
-    size_t before = sm_pn; P("%s %s%s%s\n", h.c_str(), sm_age(c.now - sm_nbrs[i].heard, age), sm_nbrs[i].name[0] ? " " : "", sm_nbrs[i].name);
+    char age[8]; std::string h = sm_nbrs[i].id.toHex(); if (shrt) h.resize(8);
+    size_t before = sm_pn; P("%-*s %5s", w, h.c_str(), sm_age(c.now - sm_nbrs[i].heard, age));
+    if (sm_nbrs[i].name[0]) P("  %s", sm_nbrs[i].name);
+    P("\n");
     if (sm_pn > c.limit) { pb_cut(before); c.more = true; break; }
     c.rows++;
   }

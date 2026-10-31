@@ -50,12 +50,12 @@
 
 <details>
 <summary><kbd>r</kbd> <code>/page/r.mu</code> &mdash; Routes</summary>
-<p>The node's path table: destination hash &middot; hop count &middot; last heard, 10 rows per page, short or full hash display.</p>
+<p>The node's path table as a table: a dim header row (dest &middot; hops &middot; heard &middot; name) over aligned rows; the name only for destinations that are also direct neighbours. Up to 10 rows per page (fewer when the one-packet page budget runs out, the rest under "next"), short or full hash display.</p>
 </details>
 
 <details>
 <summary><kbd>b</kbd> <code>/page/b.mu</code> &mdash; Neighbours</summary>
-<p>Peers this node has heard announce: destination hash &middot; time since heard &middot; name, paginated. Routes and Neighbours link to each other; admins also get a Visitors link.</p>
+<p>Peers this node has heard announce, as a table: node &middot; heard &middot; name, paginated. Routes and Neighbours link to each other; admins also get Visitors and Device links.</p>
 </details>
 
 <details>
