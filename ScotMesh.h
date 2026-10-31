@@ -1174,7 +1174,9 @@ static void pg_visitors() {
   int o = atoi(Vv("o")); if (o < 0) o = 0;
   const int n = 10;
   auto ls = sm_links_by_silence(); double now = RNS::Utilities::OS::time();
-  P("#!c=0\n>Visitors " DIM("%u " MIDDOT " silent " MIDDOT " hops " MIDDOT " who") "\n", (unsigned)ls.size());
+  // Title bar holds only the title; the column names go in a dim header row
+  // underneath, padded to the same widths as the rows so it reads as a table.
+  P("#!c=0\n>Visitors " MIDDOT " %u open\n" DIM("link      idle  hops  who") "\n", (unsigned)ls.size());
   const size_t limit = SM_HOME_BUDGET - 173 - (o > 0 ? 36 : 0);   // room for the footer (+ back link)
   int rows = 0; bool more = false;
   for (size_t i = o; i < ls.size(); i++) {
@@ -1183,9 +1185,8 @@ static void pg_visitors() {
     char age[8]; std::string id = ls[i].second.link_id().toHex(); id.resize(8);
     std::string who = r.name[0] ? std::string(r.name) : r.rid ? r.rid.toHex().substr(0, 8) : std::string("anon");
     size_t before = sm_pn;
-    P("%s %s ", id.c_str(), sm_age(r.in_s, age));
-    if (r.hops) P("%u ", r.hops); else P("? ");
-    P("%s", who.c_str());
+    char hops[4] = "?"; if (r.hops) snprintf(hops, sizeof hops, "%u", r.hops);
+    P("%-8s %5s %5s  %s", id.c_str(), sm_age(r.in_s, age), hops, who.c_str());   // idle = time since anything was received
     if (r.st != 'a') P(" " DIM("%c"), r.st);
     if (r.via[0]) P(" " DIM("via") " %s", r.via);
     P("\n");
