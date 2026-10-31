@@ -344,7 +344,9 @@ static void PLf(const char* label, char pg, const char* fmt, ...) { char f[64]; 
 static void PC(const char* name, bool on) { P("`<?|%s|1%s`>", name, on ? "|*" : ""); }
 static void PR(const char* name, const char* v, bool on) { P("`<^|%s|%s%s`>", name, v, on ? "|*" : ""); }
 static void PF(int w, const char* name, const char* val) { P("`<%d|%s`%s>", w, name, val); }
-static void PBACK() { P("`[< Admin`:/page/a.mu]"); }
+// Back to the page one level up: the Admin hub, or the Settings / Access /
+// Device menu a sub page was opened from.
+static void PBACK(char up = 'a') { P("`[< %s`:/page/%c.mu]", up == 's' ? "Settings" : up == 'c' ? "Access" : up == 'd' ? "Device" : "Admin", up); }
 
 // ---------------------------------------------------------------------------
 // Request data: msgpack map. NomadNet sends field_* / var_*, API clients raw keys.
@@ -1020,7 +1022,7 @@ static void pg_list(bool routes, const RNS::Bytes& rid) {
   size_t total = routes ? RNS::Transport::new_path_table().size() : sm_nbrs.size();
   if (routes) P("#!c=0\n>Routes " DIM("%u " MIDDOT " hops " MIDDOT " heard " MIDDOT " name?") "\n", (unsigned)total);
   else P("#!c=0\n>Neighbours " DIM("heard " MIDDOT " name") "\n");
-  SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0) - (admin ? 26 : 0))};   // room for the footer (+ back link, + Visitors)
+  SmListCtx c{shrt, o, n, 0, 0, false, RNS::Utilities::OS::time(), (size_t)(SM_HOME_BUDGET - 165 - (o > 0 ? 36 : 0) - (admin ? 49 : 0))};   // room for the footer (+ back link, + Visitors and Device)
   if (routes) sm_walk_paths(sm_route_row, &c);
   else for (size_t i = o; i < sm_nbrs.size(); i++) {
     if (c.rows >= n) { c.more = true; break; }
@@ -1036,7 +1038,7 @@ static void pg_list(bool routes, const RNS::Bytes& rid) {
   char nb[4]; snprintf(nb, sizeof nb, "%d", n);
   P("\nShort "); PC("s", shrt); P(" Rows "); PF(2, "n", nb); P(" "); PL("Apply", pg, "s|n|a=1");
   P("\n"); PL(routes ? "Neighbours" : "Routes", routes ? 'b' : 'r'); P("  ");
-  if (admin) { PL("Visitors", 'v'); P("  "); }
+  if (admin) { PL("Visitors", 'v'); P("  "); PL("Device", 'd'); P("  "); }
   PL("Home", 'I');
 }
 
@@ -1173,7 +1175,7 @@ static void pg_visitors() {
   const int n = 10;
   auto ls = sm_links_by_silence(); double now = RNS::Utilities::OS::time();
   P("#!c=0\n>Visitors " DIM("%u " MIDDOT " silent " MIDDOT " hops " MIDDOT " who") "\n", (unsigned)ls.size());
-  const size_t limit = SM_HOME_BUDGET - 150 - (o > 0 ? 36 : 0);   // room for the footer (+ back link)
+  const size_t limit = SM_HOME_BUDGET - 173 - (o > 0 ? 36 : 0);   // room for the footer (+ back link)
   int rows = 0; bool more = false;
   for (size_t i = o; i < ls.size(); i++) {
     if (rows >= n) { more = true; break; }
@@ -1194,7 +1196,7 @@ static void pg_visitors() {
   else P(DIM("%d-%d/%u"), rows ? o + 1 : o, o + rows, (unsigned)ls.size());
   if (more) { P(" "); PLf("next", 'v', "o=%d", o + rows); }
   if (o > 0) { P(" "); PLf("back", 'v', "o=%d", o > n ? o - n : 0); }
-  P("\n"); PL("Routes", 'r'); P("  "); PL("Neighbours", 'b'); P("  "); PL("Home", 'I');
+  P("\n"); PL("Routes", 'r'); P("  "); PL("Neighbours", 'b'); P("  "); PL("Device", 'd'); P("  "); PL("Home", 'I');
 }
 
 static void pg_hub(const RNS::Bytes& rid, const RNS::Bytes& link_id) {
@@ -1275,7 +1277,7 @@ static void pg_name(const RNS::Bytes& rid) {
   P("Name     "); PF(32, "n", nomadnet_name); P("\nOperator "); PF(22, "o", sm.op); P("\nAnnounce every");
   for (int i = 0; i < 5; i++) { P(" "); PR("ai", AV[i], sm.ann == i); P("%s", AL[i]); }
   P("\nFlag     "); PF(2, "cf", sm_loc.cc); P(" " DIM("country code, e.g. NL") "\nFooter   "); PF(24, "ft", sm_loc.text);
-  P("\n"); PL("Save", 'n', "n|o|ai|cf|ft|a=s"); P("   "); PBACK();
+  P("\n"); PL("Save", 'n', "n|o|ai|cf|ft|a=s"); P("   "); PBACK('s');
 }
 
 static void pg_homelayout(const RNS::Bytes& rid) {
@@ -1289,7 +1291,7 @@ static void pg_homelayout(const RNS::Bytes& rid) {
   Ph("Home page"); Pmsg('o', msg); P(DIM("Ticked = public") "\n");
   for (auto& k : K) { PC(k.k, !(sm.home & k.bit) == (k.bit == SMH_NOLINK)); P(" %s\n", k.l); }
   PC("cr", !(sm.home2 & SMH2_NOCREDIT)); P(" ScotMesh credit\n"); PC("fv", !(sm.home2 & SMH2_NOVER)); P(" Firmware & board\n");
-  PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK();
+  PL("Save", 'h', "*|a=s"); P("  "); PL("Preview", 'I', "v=1"); P("  "); PBACK('s');
 }
 
 static void pg_map(const RNS::Bytes& rid) {
@@ -1315,7 +1317,7 @@ static void pg_map(const RNS::Bytes& rid) {
     else if (sm_disc_last) P("`F2c5Sent %lu min ago`f\n", (unsigned long)((millis() - sm_disc_last) / 60000));
     else P(DIM("Not sent yet") "\n");
   }
-  PL("Save", 'g', "p|h|pr|on|a=s"); if (sm.map_on) { P("  "); PL("Announce now", 'g', "a=an"); } P("  "); PBACK();
+  PL("Save", 'g', "p|h|pr|on|a=s"); if (sm.map_on) { P("  "); PL("Announce now", 'g', "a=an"); } P("  "); PBACK('s');
 }
 
 static void pg_radio(const RNS::Bytes& rid) {
@@ -1337,7 +1339,7 @@ static void pg_radio(const RNS::Bytes& rid) {
   if (sm_trial && !msg) { P("`Fda3Trial: reverts in %lu min`f ", (unsigned long)((sm_trial_until - now) / 60000 + 1)); PL("Keep", 'f', "a=k"); P("\n"); }
   char v[5][12]; snprintf(v[0], 12, "%.3f", lora_freq / 1e6); snprintf(v[1], 12, "%lu", (unsigned long)(lora_bw / 1000)); snprintf(v[2], 12, "%d", lora_sf); snprintf(v[3], 12, "%d", lora_cr); snprintf(v[4], 12, "%d", lora_txp);
   P("MHz "); PF(8, "fq", v[0]); P(" kHz "); PF(3, "bw", v[1]); P("\nSF "); PF(2, "sf", v[2]); P(" CR "); PF(1, "cr", v[3]); P(" dBm "); PF(2, "tx", v[4]); P("\n");
-  PL("Try these", 'f', "fq|bw|sf|cr|tx|a=t"); P("\n" DIM("Preset:") " "); PL("ScotMesh 868", 'f', "a=p|v=868"); P(" "); PL("433", 'f', "a=p|v=433"); P("\n"); PBACK();
+  PL("Try these", 'f', "fq|bw|sf|cr|tx|a=t"); P("\n" DIM("Preset:") " "); PL("ScotMesh 868", 'f', "a=p|v=868"); P(" "); PL("433", 'f', "a=p|v=433"); P("\n"); PBACK('s');
 }
 
 static void pg_role(const RNS::Bytes& rid) {
@@ -1357,7 +1359,7 @@ static void pg_role(const RNS::Bytes& rid) {
   int cur = sm_role();
   Ph("Role"); Pmsg('o', msg);
   for (int i = 0; i < 4; i++) { PR("r", RV[i], cur == i); P(" %s " DIM("%s") "\n", SM_ROLE_NAME[i], X[i]); }
-  P(DIM("Relays forward for others; end devices never do.") "\n"); PL("Save", 'w', "r|a=s"); P("  "); PBACK();
+  P(DIM("Relays forward for others; end devices never do.") "\n"); PL("Save", 'w', "r|a=s"); P("  "); PBACK('s');
 }
 
 static void pg_power(const RNS::Bytes& rid) {
@@ -1373,7 +1375,7 @@ static void pg_power(const RNS::Bytes& rid) {
   // it's a typo or the wrong probe point rather than ADC error.
   if (Vis("a", "c")) {
     float m = atof(Fv("mv")), c = battery_voltage > 1.0f ? battery_cal * m / battery_voltage : 0;
-    if (!(c >= 0.9f && c <= 1.1f)) { msg = battery_voltage > 1.0f ? "Meter more than 10% off the reading." : "No battery reading yet."; kind = 'b'; }
+    if (!(c >= 0.9f && c <= 1.1f)) { msg = battery_voltage > 1.0f ? "Meter >10% off. Check it." : "No battery reading yet."; kind = 'b'; }
     else { battery_set_cal(c); RNS::Utilities::OS::write_file(SM_CAL_PATH, RNS::Bytes((const uint8_t*)&c, sizeof(c))); sm_change(rid, "battery calibration"); msg = "Calibrated."; }
   }
   if (Vis("a", "cz")) { battery_set_cal(1.0f); RNS::Utilities::OS::remove_file(SM_CAL_PATH); sm_change(rid, "battery calibration reset"); msg = "Calibration reset."; }
@@ -1390,7 +1392,7 @@ static void pg_power(const RNS::Bytes& rid) {
   if (battery_cal != 1.0f) { P(" "); PL("Reset", 'y', "a=cz"); }
   P("\n");
 #endif
-  PBACK();
+  PBACK('s');
 }
 
 static void pg_health() {
@@ -1403,7 +1405,7 @@ static void pg_health() {
   P(DIM("Tables") " paths %u/%u, ann %u\nknown %u, links %u, nbrs %u\n", (unsigned)RNS::Transport::new_path_table().size(), (unsigned)RNS::Transport::path_table_maxsize(),
     (unsigned)RNS::Transport::announce_table().size(), (unsigned)RNS::Identity::known_destinations().size(), (unsigned)RNS::Transport::active_links().size(), (unsigned)sm_nbrs.size());
   P(DIM("Closed") " stuck %lu, idle %lu, mem %lu\n", (unsigned long)sm_links_closed_stuck, (unsigned long)sm_links_closed_idle, (unsigned long)sm_links_closed_mem);
-  PBACK();
+  PBACK('d');
 }
 
 static void pg_lights_bt(const RNS::Bytes& rid) {
@@ -1437,13 +1439,13 @@ static void pg_lights_bt(const RNS::Bytes& rid) {
 #endif
   P("\n<\n");
 #endif
-  PBACK();
+  PBACK('d');
 }
 
 static void pg_logs() {
   Ph("Log");
   for (int i = 0; i < sm_log_count; i++) P("%.38s\n", sm_log_ring[(sm_log_next + 5 - sm_log_count + i) % 5]);
-  PL("Refresh", 'o'); P("  "); PBACK();
+  PL("Refresh", 'o'); P("  "); PBACK('d');
 }
 
 static void pg_changes() {
@@ -1456,7 +1458,7 @@ static void pg_changes() {
     P("%s ago %s\n" DIM("%s") "\n", sm_age(now - c.t, age), c.what, RNS::Bytes(c.id, 16).toHex().c_str());
   }
   if (o + 3 < (int)total) { PLf("older", 'j', "o=%d", o + 3); P("\n"); }
-  PBACK();
+  PBACK('c');
 }
 
 static void pg_maint(const RNS::Bytes& rid) {
@@ -1486,7 +1488,7 @@ static void pg_maint(const RNS::Bytes& rid) {
   if (!strcmp(a, "sc")) { sm.sched = Fis("sm", "d") ? 1 : Fis("sm", "w") ? 2 : 0; sm_save(); sm_change(rid, "auto restart"); msg = "Saved."; }
   Ph("Maintenance"); Pmsg(kind, msg); PL("Announce now", 'x', "a=an");
   P("\n>>Auto restart\n"); PR("sm", "o", sm.sched == 0); P(" Off "); PR("sm", "d", sm.sched == 1); P(" Every day "); PR("sm", "w", sm.sched == 2); P(" Every week "); PL("Save", 'x', "sm|a=sc");
-  P("\n>>Reset\n"); PL("Clear routes & data", 'x', "a=cs"); P("  "); PL("Factory reset", 'x', "a=fr"); P("  "); PL("Full reset", 'x', "a=fx"); P("\n<\n"); PBACK();
+  P("\n>>Reset\n"); PL("Clear routes & data", 'x', "a=cs"); P("  "); PL("Factory reset", 'x', "a=fr"); P("  "); PL("Full reset", 'x', "a=fx"); P("\n<\n"); PBACK('d');
 }
 
 static void pg_update(const RNS::Bytes& rid) {
@@ -1548,7 +1550,7 @@ static void pg_update(const RNS::Bytes& rid) {
 #else
   P("This board has one firmware slot:\nupdate over USB.\n");
 #endif
-  P("<\n"); PBACK();
+  P("<\n"); PBACK('d');
 }
 
 static void pg_about() {
@@ -1562,7 +1564,7 @@ static void pg_about() {
   P(DIM("LXMF in %u, out %u, last:") "\n%s\n", sm_lxmf_rx_n, sm_lxmf_tx_n, sm_lxmf_last);
 #endif
   P(DIM("Probe") "\n%s\n", hx(RNS::Transport::probe_destination()).c_str());
-  PBACK();
+  PBACK('d');
 }
 
 #ifdef HAS_ENV_SENSORS
@@ -1644,7 +1646,7 @@ static void pg_admins(const RNS::Bytes& rid) {
   }
   if ((int)list.size() > 3) { PLf("more", 'k', "o=%d", o + 3 < (int)list.size() ? o + 3 : 0); P("\n"); }
   if (list.size() < 8) { P(DIM("Add") " "); PF(32, "h", ""); P(" "); PL("Add", 'k', "h|a=ad"); P("\n"); }
-  PBACK();
+  PBACK('c');
 }
 
 static void pg_queue(const RNS::Bytes& rid) {
@@ -1680,7 +1682,7 @@ static void pg_password(const RNS::Bytes& rid) {
   Ph("Password registration"); Pmsg(kind, msg);
   if ((int32_t)(sm_reg_paused_until - millis()) > 0) Pmsg('b', "Paused after 10 wrong tries");
   PC("e", sm.pw_on); P(" On   "); PC("v", sm.pw_approval); P(" Needs approval\nNew   `<!16|p1`>\nAgain `<!16|p2`> blank=keep\n");
-  PL("Save", 'p', "e|v|p1|p2|a=s"); P("  "); PBACK();
+  PL("Save", 'p', "e|v|p1|p2|a=s"); P("  "); PBACK('c');
   if (sm_last_attempt[0]) P("\n>>Last attempt\n%s", sm_last_attempt);
 }
 
